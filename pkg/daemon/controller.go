@@ -61,6 +61,9 @@ type Controller struct {
 	nodesLister listerv1.NodeLister
 	nodesSynced cache.InformerSynced
 
+	htbQosLister kubeovnlister.HtbQosLister
+	htbQosSynced cache.InformerSynced
+
 	recorder record.EventRecorder
 
 	iptables  map[string]*iptables.IPTables
@@ -81,6 +84,7 @@ func NewController(config *Configuration, podInformerFactory informers.SharedInf
 	subnetInformer := kubeovnInformerFactory.Kubeovn().V1().Subnets()
 	podInformer := podInformerFactory.Core().V1().Pods()
 	nodeInformer := nodeInformerFactory.Core().V1().Nodes()
+	htbQosInformer := kubeovnInformerFactory.Kubeovn().V1().HtbQoses()
 
 	controller := &Controller{
 		config: config,
@@ -100,6 +104,9 @@ func NewController(config *Configuration, podInformerFactory informers.SharedInf
 
 		nodesLister: nodeInformer.Lister(),
 		nodesSynced: nodeInformer.Informer().HasSynced,
+
+		htbQosLister: htbQosInformer.Lister(),
+		htbQosSynced: htbQosInformer.Informer().HasSynced,
 
 		recorder: recorder,
 	}
@@ -568,7 +575,7 @@ func (c *Controller) processNextSubnetWorkItem() bool {
 func (c *Controller) reconcileRouters(event subnetEvent) error {
 	subnets, err := c.subnetsLister.List(labels.Everything())
 	if err != nil {
-		klog.Errorf("failed to list namespace %v", err)
+		klog.Errorf("failed to list subnets %v", err)
 		return err
 	}
 
@@ -890,6 +897,10 @@ func (c *Controller) enqueuePod(old, new interface{}) {
 
 	if oldPod.Annotations[util.IngressRateAnnotation] != newPod.Annotations[util.IngressRateAnnotation] ||
 		oldPod.Annotations[util.EgressRateAnnotation] != newPod.Annotations[util.EgressRateAnnotation] ||
+		oldPod.Annotations[util.PriorityAnnotation] != newPod.Annotations[util.PriorityAnnotation] ||
+		oldPod.Annotations[util.NetemQosLatencyAnnotation] != newPod.Annotations[util.NetemQosLatencyAnnotation] ||
+		oldPod.Annotations[util.NetemQosLimitAnnotation] != newPod.Annotations[util.NetemQosLimitAnnotation] ||
+		oldPod.Annotations[util.NetemQosLossAnnotation] != newPod.Annotations[util.NetemQosLossAnnotation] ||
 		oldPod.Annotations[util.MirrorControlAnnotation] != newPod.Annotations[util.MirrorControlAnnotation] {
 		var key string
 		var err error
@@ -943,7 +954,6 @@ func (c *Controller) handlePod(key string) error {
 		utilruntime.HandleError(fmt.Errorf("invalid resource key: %s", key))
 		return nil
 	}
-
 	klog.Infof("handle qos update for pod %s/%s", namespace, name)
 
 	pod, err := c.podsLister.Pods(namespace).Get(name)
@@ -962,8 +972,7 @@ func (c *Controller) handlePod(key string) error {
 
 	// set default nic bandwidth
 	ifaceID := ovs.PodNameToPortName(pod.Name, pod.Namespace, util.OvnProvider)
-	err = ovs.SetInterfaceBandwidth(pod.Name, pod.Namespace, ifaceID, pod.Annotations[util.EgressRateAnnotation], pod.Annotations[util.IngressRateAnnotation])
-
+	err = ovs.SetInterfaceBandwidth(pod.Name, pod.Namespace, ifaceID, pod.Annotations[util.EgressRateAnnotation], pod.Annotations[util.IngressRateAnnotation], pod.Annotations[util.PriorityAnnotation])
 	if err != nil {
 		return err
 	}
@@ -971,6 +980,12 @@ func (c *Controller) handlePod(key string) error {
 	if err != nil {
 		return err
 	}
+	// set linux-netem qos
+	err = ovs.SetNetemQos(pod.Name, pod.Namespace, ifaceID, pod.Annotations[util.NetemQosLatencyAnnotation], pod.Annotations[util.NetemQosLimitAnnotation], pod.Annotations[util.NetemQosLossAnnotation])
+	if err != nil {
+		return err
+	}
+
 	// set multus-nic bandwidth
 	attachNets, err := util.ParsePodNetworkAnnotation(pod.Annotations[util.AttachmentNetworkAnnotation], pod.Namespace)
 	if err != nil {
@@ -980,7 +995,7 @@ func (c *Controller) handlePod(key string) error {
 		provider := fmt.Sprintf("%s.%s.ovn", multiNet.Name, multiNet.Namespace)
 		if pod.Annotations[fmt.Sprintf(util.AllocatedAnnotationTemplate, provider)] == "true" {
 			ifaceID = ovs.PodNameToPortName(pod.Name, pod.Namespace, provider)
-			err = ovs.SetInterfaceBandwidth(pod.Name, pod.Namespace, ifaceID, pod.Annotations[fmt.Sprintf(util.EgressRateAnnotationTemplate, provider)], pod.Annotations[fmt.Sprintf(util.IngressRateAnnotationTemplate, provider)])
+			err = ovs.SetInterfaceBandwidth(pod.Name, pod.Namespace, ifaceID, pod.Annotations[fmt.Sprintf(util.EgressRateAnnotationTemplate, provider)], pod.Annotations[fmt.Sprintf(util.IngressRateAnnotationTemplate, provider)], pod.Annotations[fmt.Sprintf(util.PriorityAnnotationTemplate, provider)])
 			if err != nil {
 				return err
 			}
@@ -1063,6 +1078,105 @@ func (c *Controller) markAndCleanInternalPort() error {
 	return nil
 }
 
+func (c *Controller) loopCheckSubnetQosPriority() {
+	subnets, err := c.subnetsLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("failed to list subnets %v", err)
+		return
+	}
+
+	for _, subnet := range subnets {
+		if subnet.Spec.HtbQos == "" {
+			if err := c.deleteSubnetQos(subnet); err != nil {
+				klog.Errorf("failed to delete htb qos for subnet %s: %v", subnet.Name, err)
+				return
+			}
+		} else {
+			if err := c.setSubnetQosPriority(subnet); err != nil {
+				klog.Errorf("failed to set htb qos priority for subnet %s: %v", subnet.Name, err)
+				return
+			}
+		}
+	}
+}
+
+func (c *Controller) setSubnetQosPriority(subnet *kubeovnv1.Subnet) error {
+	htbQos, err := c.htbQosLister.Get(subnet.Spec.HtbQos)
+	if err != nil {
+		klog.Errorf("failed to get htbqos %s: %v", subnet.Spec.HtbQos, err)
+		return err
+	}
+
+	pods, err := c.podsLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("failed to list pods, %v", err)
+		return err
+	}
+
+	for _, pod := range pods {
+		if pod.Spec.HostNetwork ||
+			pod.DeletionTimestamp != nil ||
+			pod.Status.PodIP == "" ||
+			pod.Annotations[util.LogicalSwitchAnnotation] != subnet.Name {
+			continue
+		}
+
+		ifaceID := ovs.PodNameToPortName(pod.Name, pod.Namespace, util.OvnProvider)
+		priority := htbQos.Spec.Priority
+		if pod.Annotations[util.PriorityAnnotation] != "" {
+			priority = pod.Annotations[util.PriorityAnnotation]
+		}
+
+		if err = ovs.SetPodQosPriority(pod.Name, pod.Namespace, ifaceID, priority); err != nil {
+			klog.Errorf("failed to set htbqos priority for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Controller) deleteSubnetQos(subnet *kubeovnv1.Subnet) error {
+	pods, err := c.podsLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("failed to list pods, %v", err)
+		return err
+	}
+
+	for _, pod := range pods {
+		if pod.Spec.HostNetwork ||
+			pod.DeletionTimestamp != nil ||
+			pod.Annotations[util.LogicalSwitchAnnotation] != subnet.Name ||
+			pod.Annotations[util.IngressRateAnnotation] != "" ||
+			pod.Annotations[util.PriorityAnnotation] != "" {
+			continue
+		}
+
+		htbQos, err := ovs.IsHtbQos(pod.Name, pod.Namespace)
+		if err != nil {
+			return err
+		}
+		if !htbQos {
+			continue
+		}
+
+		if err = ovs.ClearPortQosBinding(pod.Name, pod.Namespace); err != nil {
+			klog.Errorf("failed to delete qos bingding info for interface %s/%s: %v", pod.Namespace, pod.Name, err)
+			return err
+		}
+
+		if err = ovs.ClearPodBandwidth(pod.Name, pod.Namespace); err != nil {
+			klog.Errorf("failed to delete htbqos record for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+			return err
+		}
+
+		if err = ovs.ClearHtbQosQueue(pod.Name, pod.Namespace); err != nil {
+			klog.Errorf("failed to delete htbqos queue for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+			return err
+		}
+	}
+	return nil
+}
+
 // Run starts controller
 func (c *Controller) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
@@ -1074,7 +1188,7 @@ func (c *Controller) Run(stopCh <-chan struct{}) {
 	go wait.Until(ovs.CleanLostInterface, time.Minute, stopCh)
 	go wait.Until(recompute, 10*time.Minute, stopCh)
 
-	if ok := cache.WaitForCacheSync(stopCh, c.providerNetworksSynced, c.subnetsSynced, c.podsSynced, c.nodesSynced); !ok {
+	if ok := cache.WaitForCacheSync(stopCh, c.providerNetworksSynced, c.subnetsSynced, c.podsSynced, c.nodesSynced, c.htbQosSynced); !ok {
 		klog.Fatalf("failed to wait for caches to sync")
 		return
 	}
@@ -1097,6 +1211,7 @@ func (c *Controller) Run(stopCh <-chan struct{}) {
 			klog.Errorf("gc ovs port error: %v", err)
 		}
 	}, 5*time.Minute, stopCh)
+	go wait.Until(c.loopCheckSubnetQosPriority, 5*time.Second, stopCh)
 	<-stopCh
 	klog.Info("Shutting down workers")
 }
