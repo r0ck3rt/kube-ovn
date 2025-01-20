@@ -19,104 +19,30 @@ limitations under the License.
 package fake
 
 import (
-	"context"
-
-	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
-	types "k8s.io/apimachinery/pkg/types"
-	watch "k8s.io/apimachinery/pkg/watch"
-	testing "k8s.io/client-go/testing"
+	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned/typed/kubeovn/v1"
+	gentype "k8s.io/client-go/gentype"
 )
 
-// FakeIPs implements IPInterface
-type FakeIPs struct {
+// fakeIPs implements IPInterface
+type fakeIPs struct {
+	*gentype.FakeClientWithList[*v1.IP, *v1.IPList]
 	Fake *FakeKubeovnV1
 }
 
-var ipsResource = schema.GroupVersionResource{Group: "kubeovn.io", Version: "v1", Resource: "ips"}
-
-var ipsKind = schema.GroupVersionKind{Group: "kubeovn.io", Version: "v1", Kind: "IP"}
-
-// Get takes name of the iP, and returns the corresponding iP object, and an error if there is any.
-func (c *FakeIPs) Get(ctx context.Context, name string, options v1.GetOptions) (result *kubeovnv1.IP, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootGetAction(ipsResource, name), &kubeovnv1.IP{})
-	if obj == nil {
-		return nil, err
+func newFakeIPs(fake *FakeKubeovnV1) kubeovnv1.IPInterface {
+	return &fakeIPs{
+		gentype.NewFakeClientWithList[*v1.IP, *v1.IPList](
+			fake.Fake,
+			"",
+			v1.SchemeGroupVersion.WithResource("ips"),
+			v1.SchemeGroupVersion.WithKind("IP"),
+			func() *v1.IP { return &v1.IP{} },
+			func() *v1.IPList { return &v1.IPList{} },
+			func(dst, src *v1.IPList) { dst.ListMeta = src.ListMeta },
+			func(list *v1.IPList) []*v1.IP { return gentype.ToPointerSlice(list.Items) },
+			func(list *v1.IPList, items []*v1.IP) { list.Items = gentype.FromPointerSlice(items) },
+		),
+		fake,
 	}
-	return obj.(*kubeovnv1.IP), err
-}
-
-// List takes label and field selectors, and returns the list of IPs that match those selectors.
-func (c *FakeIPs) List(ctx context.Context, opts v1.ListOptions) (result *kubeovnv1.IPList, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootListAction(ipsResource, ipsKind, opts), &kubeovnv1.IPList{})
-	if obj == nil {
-		return nil, err
-	}
-
-	label, _, _ := testing.ExtractFromListOptions(opts)
-	if label == nil {
-		label = labels.Everything()
-	}
-	list := &kubeovnv1.IPList{ListMeta: obj.(*kubeovnv1.IPList).ListMeta}
-	for _, item := range obj.(*kubeovnv1.IPList).Items {
-		if label.Matches(labels.Set(item.Labels)) {
-			list.Items = append(list.Items, item)
-		}
-	}
-	return list, err
-}
-
-// Watch returns a watch.Interface that watches the requested iPs.
-func (c *FakeIPs) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-	return c.Fake.
-		InvokesWatch(testing.NewRootWatchAction(ipsResource, opts))
-}
-
-// Create takes the representation of a iP and creates it.  Returns the server's representation of the iP, and an error, if there is any.
-func (c *FakeIPs) Create(ctx context.Context, iP *kubeovnv1.IP, opts v1.CreateOptions) (result *kubeovnv1.IP, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootCreateAction(ipsResource, iP), &kubeovnv1.IP{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.IP), err
-}
-
-// Update takes the representation of a iP and updates it. Returns the server's representation of the iP, and an error, if there is any.
-func (c *FakeIPs) Update(ctx context.Context, iP *kubeovnv1.IP, opts v1.UpdateOptions) (result *kubeovnv1.IP, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateAction(ipsResource, iP), &kubeovnv1.IP{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.IP), err
-}
-
-// Delete takes name of the iP and deletes it. Returns an error if one occurs.
-func (c *FakeIPs) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
-	_, err := c.Fake.
-		Invokes(testing.NewRootDeleteActionWithOptions(ipsResource, name, opts), &kubeovnv1.IP{})
-	return err
-}
-
-// DeleteCollection deletes a collection of objects.
-func (c *FakeIPs) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewRootDeleteCollectionAction(ipsResource, listOpts)
-
-	_, err := c.Fake.Invokes(action, &kubeovnv1.IPList{})
-	return err
-}
-
-// Patch applies the patch and returns the patched iP.
-func (c *FakeIPs) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *kubeovnv1.IP, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootPatchSubresourceAction(ipsResource, name, pt, data, subresources...), &kubeovnv1.IP{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.IP), err
 }

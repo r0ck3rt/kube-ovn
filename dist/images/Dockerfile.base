@@ -1,78 +1,195 @@
 # syntax = docker/dockerfile:experimental
-FROM ubuntu:22.04 as ovs-builder
+ARG GO_VERSION=1.23.5
+
+FROM ubuntu:24.04 AS ovs-builder
 
 ARG ARCH
+ARG LEGACY
 ARG DEBIAN_FRONTEND=noninteractive
 ENV SRC_DIR='/usr/src'
 
-RUN apt update && apt install build-essential git libnuma-dev autoconf curl \
-    python3 libmnl-dev libpcap-dev libtool libcap-ng-dev libssl-dev pkg-config \
-    python3-six libunbound-dev libunwind-dev dh-make fakeroot debhelper dh-python \
-    flake8 python3-sphinx graphviz groff wget libjemalloc-dev -y
+RUN apt update && apt install -y git curl
 
 RUN cd /usr/src/ && \
-    git clone -b branch-2.16 --depth=1 https://github.com/openvswitch/ovs.git && \
+    git clone -b branch-3.3 --depth=1 https://github.com/openvswitch/ovs.git && \
     cd ovs && \
-    curl -s https://github.com/kubeovn/ovs/commit/22ea22c40b46ee5adeae977ff6cfca81b3ff25d7.patch | git apply && \
-    ./boot.sh && \
-    rm -rf .git && \
-    CONFIGURE_OPTS='LIBS=-ljemalloc' && \
-    if [ "$ARCH" = "amd64" ]; then CONFIGURE_OPTS='LIBS=-ljemalloc CFLAGS="-O2 -g -msse4.2 -mpopcnt"'; fi && \
-    DATAPATH_CONFIGURE_OPTS='--prefix=/usr' EXTRA_CONFIGURE_OPTS=$CONFIGURE_OPTS DEB_BUILD_OPTIONS='parallel=8 nocheck' fakeroot debian/rules binary
+    # fix memory leak by ofport_usage and trim memory periodically
+    curl -s https://github.com/kubeovn/ovs/commit/8ff6820a3db1087a6ea4a28a1f743e079ea87315.patch | git apply && \
+    # increase election timer
+    curl -s https://github.com/kubeovn/ovs/commit/98e1f9081f107205edc40478f61ae79a43c83061.patch | git apply && \
+    # add fdb update logging
+    curl -s https://github.com/kubeovn/ovs/commit/f2ac94a5a1f382fc4b8e2d3d7725d98ebbef13e2.patch | git apply && \
+    # fdb: fix mac learning in environments with hairpin enabled
+    curl -s https://github.com/kubeovn/ovs/commit/321868c6897b9ebcaad9ce3c012e664f84c99ee9.patch | git apply && \
+    # ovsdb-tool: add optional server id parameter for "join-cluster" command
+    curl -s https://github.com/kubeovn/ovs/commit/968b4eb4140b2944d75767aa9ae0625bdcc61596.patch | git apply && \
+    # fix memory leak in qos
+    curl -s https://github.com/kubeovn/ovs/commit/fd25c5273eed96e8bc9efab46eecbc815e0ce22b.patch | git apply && \
+    # ovsdb-tool: add command fix-cluster
+    curl -s https://github.com/kubeovn/ovs/commit/32f907ae9a1f8efe58dfb58107f02b1442b18edc.patch | git apply && \
+    # netdev: reduce cpu utilization for getting device addresses
+    curl -s https://github.com/kubeovn/ovs/commit/28d41977a26606f324eadd8d907a8fb2e18505d9.patch | git apply && \
+    # ovs-router: skip getting source address for kube-ipvs0
+    curl -s https://github.com/kubeovn/ovs/commit/b7129150cb763d1fd081ee3c6f669da90d46b965.patch | git apply && \
+    # increase the default probe interval for large cluster
+    curl -s https://github.com/kubeovn/ovs/commit/7e894a0bda966e746f81b2ebe262a62cd91bf269.patch | git apply && \
+    # update ovs-sandbox for docker run
+    curl -s https://github.com/kubeovn/ovs/commit/54b767822916606dbb78335a3197983f435b5b8a.patch | git apply
 
-RUN dpkg -i /usr/src/python3-openvswitch*.deb /usr/src/libopenvswitch*.deb
-
-RUN cd /usr/src/ && git clone -b branch-21.06 --depth=1 https://github.com/ovn-org/ovn.git && \
+RUN cd /usr/src/ && git clone -b branch-24.03 --depth=1 https://github.com/ovn-org/ovn.git && \
     cd ovn && \
-    curl -s https://github.com/kubeovn/ovn/commit/e24734913d25c0bffdf1cfd79e14ef43d01e1019.patch | git apply && \
-    curl -s https://github.com/kubeovn/ovn/commit/8f4e4868377afb5e980856755b9f6394f8b649e2.patch | git apply && \
-    curl -s https://github.com/kubeovn/ovn/commit/23a87cabb76fbdce5092a6b3d3b56f3fa8dd61f5.patch | git apply && \
-    curl -s https://github.com/kubeovn/ovn/commit/89ca60989df4af9a96cc6024e04f99b9b77bad22.patch | git apply && \
-    curl -s https://github.com/kubeovn/ovn/commit/aeafa43fc51be8ea1c7abfbe779c69205c1c5aa4.patch | git apply && \
-    curl -s https://github.com/kubeovn/ovn/commit/71f831b9cc5a6dc923af4ca90286857e2cf8b1d3.patch | git apply && \
+    # change hash type from dp_hash to hash with field src_ip
+    curl -s https://github.com/kubeovn/ovn/commit/61ece99b63e88bb12c030c34b46716b01e242c92.patch | git apply && \
+    # modify src route priority
+    curl -s https://github.com/kubeovn/ovn/commit/cecf1515de299b3ec6b30ed8a167748e879188a6.patch | git apply && \
+    # fix reaching resubmit limit in underlay
+    curl -s https://github.com/kubeovn/ovn/commit/eb935585bdeecdaa3fba8ff2c46ef394ce8d2424.patch | git apply && \
+    # ovn-controller: do not send GARP on localnet for Kube-OVN ports
+    curl -s https://github.com/kubeovn/ovn/commit/8236ec78aedd114b3ce22158a9e0282337787259.patch | git apply && \
+    # northd: add nb option version_compatibility
+    curl -s https://github.com/kubeovn/ovn/commit/6fbe060936bb1f843c7997f5e66075ce75c62772.patch | git apply && \
+    # add support for conditionally skipping conntrack
+    curl -s https://github.com/kubeovn/ovn/commit/c6ea5e214a4a20eccdf8cd18c232284edc5ce951.patch | git apply && \
+    # northd: skip conntrack when access node local dns ip
+    curl -s https://github.com/kubeovn/ovn/commit/d8ce6dc8e512b703903c53e344b1dce1a0c61d2e.patch | git apply && \
+    # lflow: do not send direct traffic between lports to conntrack
+    curl -s https://github.com/kubeovn/ovn/commit/baf2d74f0f2d746c01c22002ea72426d75cfc79a.patch | git apply && \
+    # direct output to lsp for dnat packets in logical switch ingress pipelines
+    curl -s https://github.com/kubeovn/ovn/commit/51fdeada788d7249df00c140e9496f4b753e7178.patch | git apply && \
+    # fix lr-lb dnat with multiple distributed gateway ports
+    curl -s https://github.com/kubeovn/ovn/commit/ca5ccf3c8ac67bcc005110c8c62214d2684e7e41.patch | git apply && \
+    # northd: skip arp/nd request for lrp addresses from localnet ports
+    curl -s https://github.com/kubeovn/ovn/commit/1ba3263940c1e2e87e61cb011dcf942a0456224d.patch | git apply && \
+    # ovn-controller: make activation strategy work for single chassis
+    curl -s https://github.com/kubeovn/ovn/commit/1160d956e49e8f3f1b19535dbf1b9a624a090717.patch | git apply && \
+    # support dedicated BFD LRP
+    curl -s https://github.com/kubeovn/ovn/commit/40345aa35d03c93cde877ccfa8111346291ebc7c.patch | git apply && \
+    # skip node local dns ip conntrack when set acl
+    curl -s https://github.com/kubeovn/ovn/commit/e7d3ba53cdcbc524bb29c54ddb07b83cc4258ed7.patch | git apply
+
+RUN apt install -y build-essential fakeroot \
+    autoconf automake bzip2 debhelper-compat dh-exec dh-python dh-sequence-python3 dh-sequence-sphinxdoc \
+    graphviz iproute2 libcap-ng-dev libdbus-1-dev libnuma-dev libpcap-dev libssl-dev libtool libunbound-dev \
+    openssl pkg-config procps python3-all-dev python3-setuptools python3-sortedcontainers python3-sphinx
+
+RUN cd /usr/src/ovs && \
+    ./boot.sh && \
+    ./configure && \
+    rm -rf .git && \
+    CONFIGURE_OPTS='CFLAGS="-fPIC"' && \
+    if [ "$ARCH" = "amd64" ] && [ "$LEGACY" != "true" ]; then CONFIGURE_OPTS='CFLAGS="-O2 -g -msse4.2 -mpopcnt -fPIC"'; fi && \
+    DATAPATH_CONFIGURE_OPTS='--prefix=/usr' EXTRA_CONFIGURE_OPTS=$CONFIGURE_OPTS make debian-deb
+
+RUN cd /usr/src/ovn && \
     sed -i 's/OVN/ovn/g' debian/changelog && \
     rm -rf .git && \
     ./boot.sh && \
-    CONFIGURE_OPTS='LIBS=-ljemalloc' && \
-    if [ "$ARCH" = "amd64" ]; then CONFIGURE_OPTS='LIBS=-ljemalloc CFLAGS="-O2 -g -msse4.2 -mpopcnt"'; fi && \
+    CONFIGURE_OPTS='--with-ovs-build=/usr/src/ovs/_debian CFLAGS="-fPIC"' && \
+    if [ "$ARCH" = "amd64" ] && [ "$LEGACY" != "true" ]; then CONFIGURE_OPTS="--with-ovs-build=/usr/src/ovs/_debian CFLAGS='-O2 -g -msse4.2 -mpopcnt -fPIC'"; fi && \
     OVSDIR=/usr/src/ovs EXTRA_CONFIGURE_OPTS=$CONFIGURE_OPTS DEB_BUILD_OPTIONS='parallel=8 nocheck' fakeroot debian/rules binary
 
-RUN mkdir /packages/ && \
-     cp /usr/src/libopenvswitch*.deb /packages && \
-     cp /usr/src/openvswitch-*.deb /packages && \
-     cp /usr/src/python3-openvswitch*.deb /packages && \
-     cp /usr/src/ovn-*.deb /packages && \
-     cd /packages && rm -f *dbg* *datapath* *docker* *vtep* *ipsec* *test* *dev*
+RUN mkdir -p /usr/src/openbfdd && \
+    curl -sSf -L --retry 5 https://github.com/dyninc/OpenBFDD/archive/e35f43ad8d2b3f084e96a84c392528a90d05a287.tar.gz | \
+    tar -xz -C /usr/src/openbfdd --strip-components=1
 
-FROM ubuntu:22.04
+ADD OpenBFDD-compile.patch /usr/src/
+ADD OpenBFDD-allow-ttl-254.patch /usr/src/
+
+RUN cd /usr/src/openbfdd && \
+    rm -vf missing && \
+    git apply --no-apply /usr/src/OpenBFDD-compile.patch && \
+    git apply --no-apply /usr/src/OpenBFDD-allow-ttl-254.patch && \
+    autoupdate && \
+    ./autogen.sh && \
+    ./configure --enable-silent-rules && \
+    make
+
+RUN mkdir /packages/ && \
+    mv /usr/src/openbfdd/bfdd-beacon /usr/src/openbfdd/bfdd-control /packages/ && \
+    cp /usr/src/openvswitch-*deb /packages && \
+    cp /usr/src/python3-openvswitch*deb /packages && \
+    cp /usr/src/ovn-*deb /packages && \
+    cp /usr/src/ovs/tutorial/ovs-sandbox /packages && \
+    cd /packages && rm -f *source* *doc* *datapath* *docker* *vtep* *test* *dev*
+
+FROM ghcr.io/aquasecurity/trivy:latest AS trivy
+
+ARG ARCH
+ENV CNI_PLUGINS_VERSION="v1.6.2"
+ENV KUBECTL_VERSION="v1.32.1"
+ENV GOBGP_VERSION="3.33.0"
+ENV TRIVY_DB_REPOSITORY="public.ecr.aws/aquasecurity/trivy-db:2"
+
+RUN apk --no-cache add curl jq
+ADD go-deps/download-go-deps.sh /
+RUN sh -x /download-go-deps.sh
+
+FROM golang:$GO_VERSION-alpine AS go-deps
+
+RUN apk --no-cache add bash curl jq
+ADD go-deps/rebuild-go-deps.sh /
+RUN --mount=type=bind,target=/trivy,from=trivy,source=/godeps \
+    bash -x /rebuild-go-deps.sh
+
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt update && apt upgrade -y && apt install ca-certificates python3 hostname libunwind8 netbase \
-        ethtool iproute2 ncat libunbound-dev procps libatomic1 kmod iptables \
-        tcpdump ipset curl uuid-runtime openssl inetutils-ping arping ndisc6 \
-        logrotate libjemalloc2 dnsutils -y --no-install-recommends && \
+        ethtool iproute2 ncat libunbound8 procps libatomic1 kmod iptables python3-netifaces python3-sortedcontainers \
+        tcpdump ipvsadm ipset curl uuid-runtime openssl inetutils-ping arping ndisc6 conntrack traceroute iputils-tracepath \
+        logrotate dnsutils net-tools strongswan strongswan-pki libcharon-extra-plugins libmnl0 \
+        libcharon-extauth-plugins libstrongswan-extra-plugins libstrongswan-standard-plugins -y --no-install-recommends && \
+        setcap CAP_NET_ADMIN+eip $(readlink -f $(which conntrack)) && \
+        setcap CAP_NET_ADMIN+eip $(readlink -f $(which ethtool)) && \
+        setcap CAP_NET_ADMIN+eip $(readlink -f $(which ip)) && \
+        setcap CAP_NET_ADMIN+eip $(readlink -f $(which ipset)) && \
+        setcap CAP_NET_ADMIN,CAP_NET_RAW+eip $(readlink -f $(which xtables-legacy-multi)) && \
+        setcap CAP_NET_ADMIN,CAP_NET_RAW+eip $(readlink -f $(which xtables-nft-multi)) && \
+        setcap CAP_NET_RAW+eip $(readlink -f $(which arping)) && \
+        setcap CAP_NET_RAW+eip $(readlink -f $(which ndisc6)) && \
+        setcap CAP_NET_RAW+eip $(readlink -f $(which tcpdump)) && \
+        setcap CAP_SYS_ADMIN+eip $(readlink -f $(which nsenter)) && \
+        setcap CAP_SYS_ADMIN+eip $(readlink -f $(which sysctl)) && \
+        setcap CAP_SYS_MODULE+eip $(readlink -f $(which modprobe)) && \
+        setcap CAP_SYS_NICE+eip $(readlink -f $(which nice)) && \
         rm -rf /var/lib/apt/lists/* && \
-        cd /usr/sbin && \
-        ln -sf /usr/sbin/iptables-legacy iptables && \
-        ln -sf /usr/sbin/ip6tables-legacy ip6tables && \
-        rm -rf /etc/localtime
+        rm -rf /etc/localtime && \
+        rm -f /usr/bin/nc && \
+        rm -f /usr/bin/netcat && \
+        rm -f /usr/lib/apt/methods/mirror && \
+        deluser sync
 
 RUN mkdir -p /var/run/openvswitch && \
     mkdir -p /var/run/ovn && \
     mkdir -p /etc/cni/net.d && \
     mkdir -p /opt/cni/bin
 
-ARG ARCH
-ENV CNI_VERSION=v0.8.7
-RUN curl -sSf -L --retry 5 https://github.com/containernetworking/plugins/releases/download/${CNI_VERSION}/cni-plugins-linux-${ARCH}-${CNI_VERSION}.tgz | tar -xz -C . ./loopback ./portmap ./macvlan
+ARG DUMB_INIT_VERSION="1.2.5"
+RUN curl -sSf -L --retry 5 -o /usr/bin/dumb-init https://github.com/Yelp/dumb-init/releases/download/v${DUMB_INIT_VERSION}/dumb-init_${DUMB_INIT_VERSION}_$(arch) && \
+    chmod +x /usr/bin/dumb-init
 
-ENV KUBE_VERSION="v1.21.1"
+RUN --mount=type=bind,target=/godeps,from=go-deps,source=/godeps \
+    cp /godeps/loopback /godeps/portmap /godeps/macvlan ./ && \
+    cp /godeps/kubectl /godeps/gobgp /usr/bin/
 
-RUN curl -L https://dl.k8s.io/${KUBE_VERSION}/kubernetes-client-linux-${ARCH}.tar.gz | tar -xz -C . && cp ./kubernetes/client/bin/kubectl /usr/bin/kubectl \
- && chmod +x /usr/bin/kubectl && rm -rf ./kubernetes
+ARG DEBUG=false
 
 RUN --mount=type=bind,target=/packages,from=ovs-builder,source=/packages  \
-    dpkg -i /packages/libopenvswitch*.deb && \
-    dpkg -i /packages/openvswitch-*.deb && \
-    dpkg -i /packages/python3-openvswitch*.deb &&\
-    dpkg -i --ignore-depends=openvswitch-switch,openvswitch-common /packages/ovn-*.deb
+    cp /packages/bfdd-beacon /packages/bfdd-control /usr/bin/ && \
+    cp /packages/ovs-sandbox /usr/bin/ && chmod +x /usr/bin/ovs-sandbox && \
+    setcap CAP_NET_BIND_SERVICE+eip /usr/bin/bfdd-beacon && \
+    dpkg -i /packages/openvswitch-*.deb /packages/python3-openvswitch*.deb && \
+    dpkg -i --ignore-depends=openvswitch-switch,openvswitch-common /packages/ovn-*.deb && \
+    rm -rf /var/lib/openvswitch/pki/ && \
+    chown -R nobody: /var/lib/logrotate && \
+    setcap CAP_NET_ADMIN+eip $(readlink -f $(which ovs-dpctl)) && \
+    if [ "${DEBUG}" != "true" ]; then \
+        setcap CAP_NET_BIND_SERVICE+eip $(readlink -f $(which ovsdb-server)) && \
+        setcap CAP_NET_ADMIN,CAP_NET_BIND_SERVICE,CAP_SYS_ADMIN+eip $(readlink -f $(which ovs-vswitchd)); \
+    else \
+        apt update && apt install -y --no-install-recommends gdb valgrind && \
+        rm -rf /var/lib/apt/lists/* && \
+        dpkg -i --ignore-depends=openvswitch-switch,openvswitch-common /packages/*.ddeb; \
+    fi
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]

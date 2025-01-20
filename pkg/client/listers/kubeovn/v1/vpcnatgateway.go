@@ -19,10 +19,10 @@ limitations under the License.
 package v1
 
 import (
-	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
 )
 
 // VpcNatGatewayLister helps list VpcNatGateways.
@@ -30,39 +30,19 @@ import (
 type VpcNatGatewayLister interface {
 	// List lists all VpcNatGateways in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1.VpcNatGateway, err error)
+	List(selector labels.Selector) (ret []*kubeovnv1.VpcNatGateway, err error)
 	// Get retrieves the VpcNatGateway from the index for a given name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1.VpcNatGateway, error)
+	Get(name string) (*kubeovnv1.VpcNatGateway, error)
 	VpcNatGatewayListerExpansion
 }
 
 // vpcNatGatewayLister implements the VpcNatGatewayLister interface.
 type vpcNatGatewayLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*kubeovnv1.VpcNatGateway]
 }
 
 // NewVpcNatGatewayLister returns a new VpcNatGatewayLister.
 func NewVpcNatGatewayLister(indexer cache.Indexer) VpcNatGatewayLister {
-	return &vpcNatGatewayLister{indexer: indexer}
-}
-
-// List lists all VpcNatGateways in the indexer.
-func (s *vpcNatGatewayLister) List(selector labels.Selector) (ret []*v1.VpcNatGateway, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1.VpcNatGateway))
-	})
-	return ret, err
-}
-
-// Get retrieves the VpcNatGateway from the index for a given name.
-func (s *vpcNatGatewayLister) Get(name string) (*v1.VpcNatGateway, error) {
-	obj, exists, err := s.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1.Resource("vpcnatgateway"), name)
-	}
-	return obj.(*v1.VpcNatGateway), nil
+	return &vpcNatGatewayLister{listers.New[*kubeovnv1.VpcNatGateway](indexer, kubeovnv1.Resource("vpcnatgateway"))}
 }

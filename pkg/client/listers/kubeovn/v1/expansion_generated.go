@@ -18,17 +18,53 @@ limitations under the License.
 
 package v1
 
-// HtbQosListerExpansion allows custom methods to be added to
-// HtbQosLister.
-type HtbQosListerExpansion interface{}
-
 // IPListerExpansion allows custom methods to be added to
 // IPLister.
 type IPListerExpansion interface{}
 
+// IPPoolListerExpansion allows custom methods to be added to
+// IPPoolLister.
+type IPPoolListerExpansion interface{}
+
+// IptablesDnatRuleListerExpansion allows custom methods to be added to
+// IptablesDnatRuleLister.
+type IptablesDnatRuleListerExpansion interface{}
+
+// IptablesEIPListerExpansion allows custom methods to be added to
+// IptablesEIPLister.
+type IptablesEIPListerExpansion interface{}
+
+// IptablesFIPRuleListerExpansion allows custom methods to be added to
+// IptablesFIPRuleLister.
+type IptablesFIPRuleListerExpansion interface{}
+
+// IptablesSnatRuleListerExpansion allows custom methods to be added to
+// IptablesSnatRuleLister.
+type IptablesSnatRuleListerExpansion interface{}
+
+// OvnDnatRuleListerExpansion allows custom methods to be added to
+// OvnDnatRuleLister.
+type OvnDnatRuleListerExpansion interface{}
+
+// OvnEipListerExpansion allows custom methods to be added to
+// OvnEipLister.
+type OvnEipListerExpansion interface{}
+
+// OvnFipListerExpansion allows custom methods to be added to
+// OvnFipLister.
+type OvnFipListerExpansion interface{}
+
+// OvnSnatRuleListerExpansion allows custom methods to be added to
+// OvnSnatRuleLister.
+type OvnSnatRuleListerExpansion interface{}
+
 // ProviderNetworkListerExpansion allows custom methods to be added to
 // ProviderNetworkLister.
 type ProviderNetworkListerExpansion interface{}
+
+// QoSPolicyListerExpansion allows custom methods to be added to
+// QoSPolicyLister.
+type QoSPolicyListerExpansion interface{}
 
 // SecurityGroupListerExpansion allows custom methods to be added to
 // SecurityGroupLister.
@@ -38,6 +74,14 @@ type SecurityGroupListerExpansion interface{}
 // SubnetLister.
 type SubnetListerExpansion interface{}
 
+// SwitchLBRuleListerExpansion allows custom methods to be added to
+// SwitchLBRuleLister.
+type SwitchLBRuleListerExpansion interface{}
+
+// VipListerExpansion allows custom methods to be added to
+// VipLister.
+type VipListerExpansion interface{}
+
 // VlanListerExpansion allows custom methods to be added to
 // VlanLister.
 type VlanListerExpansion interface{}
@@ -45,6 +89,18 @@ type VlanListerExpansion interface{}
 // VpcListerExpansion allows custom methods to be added to
 // VpcLister.
 type VpcListerExpansion interface{}
+
+// VpcDnsListerExpansion allows custom methods to be added to
+// VpcDnsLister.
+type VpcDnsListerExpansion interface{}
+
+// VpcEgressGatewayListerExpansion allows custom methods to be added to
+// VpcEgressGatewayLister.
+type VpcEgressGatewayListerExpansion interface{}
+
+// VpcEgressGatewayNamespaceListerExpansion allows custom methods to be added to
+// VpcEgressGatewayNamespaceLister.
+type VpcEgressGatewayNamespaceListerExpansion interface{}
 
 // VpcNatGatewayListerExpansion allows custom methods to be added to
 // VpcNatGatewayLister.

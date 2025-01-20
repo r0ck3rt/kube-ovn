@@ -1,44 +1,30 @@
 # Kube-OVN RoadMap
 
-## v1.10.0 -- April 2022
+This document defines high level goals for Kube-OVN project. We welcome community contributors to discuss and update this Roadmap through Issues.
 
-### Subnet Enhancement
-- Support to add multiple subnets for one namespace
-- Use lr-policy to optimize ovn flows
+## Network Datapath
 
-### VPC Enhancement
-- VPC peering
+Kube-OVN currently supports two network modes, Overlay and Underlay. We hope to improve the stability, performance, and compatibility with the ecosystem of these two network modes in Kubernetes.
 
-### Virtualization Enhancement
-- OVS-DPDK support
-- Static IP for VM lifecycle
+-  Improved Datapath network performance
+-  Keeping up with the latest network API features in the community
+-  Enhanced network monitoring and visualization capabilities
+-  Addition of automated test cases for various scenarios
 
-### Monitoring and Operation
-- Command for restore ovn db
-- Metrics for db storage status
+## VPC Network
 
-## Planned features
+VPC network is a key feature of Kube-OVN, many functions have been used in production environment, and we hope to increase the maturity of these functions and improve the user experiences.
 
-### DataCenter Network
-- Namespaced VPC and Subnet
-- Integrate DPU to support bare metal
-- Integrate SDN switches to support bare metal
+-  Standardize multiple gateway solutions and provide the best egress practice
+-  Provide more VPC internal basic network capabilities and solutions, such as DNS, DHCP, LoadBalancer, etc.
+-  Simplify VPC operation complexity and provide a more comprehensive CLI
+-  Supplement automated test cases for various scenarios
 
-### Application Network
-- Traffic visualization and application level analyzing
-- Windows network support
-- Multi cluster network
-- Fine-grained ACL
-- Load balancer type Service
+## User Experience
 
-### Performance Enhancement
-- eBPF to accelerate intra-node communication
-- Tools for automatically profile
-- OVN/OVS tailor
-- SR-IOV and OVS-DPDK integration
+Improve the user experience of Kubernetes cni, making container networking simpler, more reliable, and efficient.
 
-### User Experience Enhancement
-- New document website and optimized for new beginners
 - Helm/Operator to automate daily operations
-- Troubleshooting tools
-- Integrated with other projects
+- More organized metrics and grafana dashboard
+- Troubleshooting tools that can automatically find known issues
+- Integrated with other projects like kubeaz, kubekey, sealos etc.

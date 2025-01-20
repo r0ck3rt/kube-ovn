@@ -1,73 +1,163 @@
-package controller
+package main
 
 import (
 	"context"
 	"fmt"
-	"github.com/kubeovn/kube-ovn/pkg/util"
+	"net"
 	"net/http"
-	_ "net/http/pprof" // #nosec
+	"net/http/pprof"
 	"os"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v1 "k8s.io/api/authorization/v1"
+	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"k8s.io/sample-controller/pkg/signals"
+	"kernel.org/pub/linux/libs/security/libcap/cap"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
 	"github.com/kubeovn/kube-ovn/pkg/controller"
-	"github.com/kubeovn/kube-ovn/pkg/ovs"
+	"github.com/kubeovn/kube-ovn/pkg/metrics"
+	"github.com/kubeovn/kube-ovn/pkg/util"
 	"github.com/kubeovn/kube-ovn/versions"
 )
+
+const ovnLeaderResource = "kube-ovn-controller"
 
 func CmdMain() {
 	defer klog.Flush()
 
-	stopCh := signals.SetupSignalHandler()
-	klog.Infof(versions.String())
+	klog.Info(versions.String())
 
-	controller.InitClientGoMetrics()
-	controller.InitWorkQueueMetrics()
-	util.InitKlogMetrics()
+	currentCaps := cap.GetProc()
+	klog.Infof("current capabilities: %s", currentCaps.String())
+
 	config, err := controller.ParseFlags()
 	if err != nil {
-		klog.Fatalf("parse config failed %v", err)
+		util.LogFatalAndExit(err, "failed to parse config")
 	}
 
 	if err := checkPermission(config); err != nil {
-		klog.Fatalf("failed to check permission %v", err)
+		util.LogFatalAndExit(err, "failed to check permission")
 	}
+	utilruntime.Must(kubeovnv1.AddToScheme(scheme.Scheme))
 
-	go loopOvnNbctlDaemon(config)
+	ctrl.SetLogger(klog.NewKlogr())
+	ctx := signals.SetupSignalHandler()
 	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		klog.Fatal(http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", config.PprofPort), nil))
+		metricsAddr := util.GetDefaultListenAddr()
+		servePprofInMetricsServer := config.EnableMetrics && metricsAddr == "0.0.0.0"
+		if config.EnablePprof && !servePprofInMetricsServer {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/debug/pprof/", pprof.Index)
+			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+			listerner, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(config.PprofPort)})
+			if err != nil {
+				util.LogFatalAndExit(err, "failed to listen on %s", util.JoinHostPort("127.0.0.1", config.PprofPort))
+			}
+			svr := manager.Server{
+				Name: "pprof",
+				Server: &http.Server{
+					Handler:           mux,
+					MaxHeaderBytes:    1 << 20,
+					IdleTimeout:       90 * time.Second,
+					ReadHeaderTimeout: 32 * time.Second,
+				},
+				Listener: listerner,
+			}
+			go func() {
+				if err = svr.Start(ctx); err != nil {
+					util.LogFatalAndExit(err, "failed to run pprof server")
+				}
+			}()
+		}
+
+		if config.EnableMetrics {
+			metrics.InitKlogMetrics()
+			metrics.InitClientGoMetrics()
+			addr := util.JoinHostPort(metricsAddr, config.PprofPort)
+			if err := metrics.Run(ctx, config.KubeRestConfig, addr, config.SecureServing, servePprofInMetricsServer); err != nil {
+				util.LogFatalAndExit(err, "failed to run metrics server")
+			}
+		} else {
+			klog.Info("metrics server is disabled")
+			listerner, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(metricsAddr), Port: int(config.PprofPort)})
+			if err != nil {
+				util.LogFatalAndExit(err, "failed to listen on %s", util.JoinHostPort(metricsAddr, config.PprofPort))
+			}
+			svr := manager.Server{
+				Name: "health-check",
+				Server: &http.Server{
+					Handler:           http.NewServeMux(),
+					MaxHeaderBytes:    1 << 20,
+					IdleTimeout:       90 * time.Second,
+					ReadHeaderTimeout: 32 * time.Second,
+				},
+				Listener: listerner,
+			}
+			go func() {
+				if err = svr.Start(ctx); err != nil {
+					util.LogFatalAndExit(err, "failed to run health check server")
+				}
+			}()
+		}
+
+		<-ctx.Done()
 	}()
 
-	ctl := controller.NewController(config)
-	ctl.Run(stopCh)
-}
-
-func loopOvnNbctlDaemon(config *controller.Configuration) {
-	for {
-		daemonSocket := os.Getenv("OVN_NB_DAEMON")
-		time.Sleep(5 * time.Second)
-
-		if _, err := os.Stat(daemonSocket); os.IsNotExist(err) || daemonSocket == "" {
-			if err := ovs.StartOvnNbctlDaemon(config.OvnNbAddr); err != nil {
-				klog.Errorf("failed to start ovn-nbctl daemon %v", err)
-			}
-		}
-
-		// ovn-nbctl daemon may hang and cannot process further request.
-		// In case of that, we need to start a new daemon.
-		if err := ovs.CheckAlive(); err != nil {
-			klog.Warningf("ovn-nbctl daemon doesn't return, start a new daemon")
-			if err := ovs.StartOvnNbctlDaemon(config.OvnNbAddr); err != nil {
-				klog.Errorf("failed to start ovn-nbctl daemon %v", err)
-			}
-		}
+	recorder := record.NewBroadcaster().NewRecorder(scheme.Scheme, apiv1.EventSource{
+		Component: ovnLeaderResource,
+		Host:      os.Getenv(util.HostnameEnv),
+	})
+	rl, err := resourcelock.NewFromKubeconfig("leases",
+		config.PodNamespace,
+		ovnLeaderResource,
+		resourcelock.ResourceLockConfig{
+			Identity:      config.PodName,
+			EventRecorder: recorder,
+		},
+		config.KubeRestConfig,
+		20*time.Second)
+	if err != nil {
+		klog.Fatalf("error creating lock: %v", err)
 	}
+
+	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		Lock:          rl,
+		LeaseDuration: 30 * time.Second,
+		RenewDeadline: 20 * time.Second,
+		RetryPeriod:   6 * time.Second,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(ctx context.Context) {
+				controller.Run(ctx, config)
+			},
+			OnStoppedLeading: func() {
+				select {
+				case <-ctx.Done():
+					klog.InfoS("Requested to terminate, exiting")
+					os.Exit(0)
+				default:
+					klog.ErrorS(nil, "leaderelection lost")
+					klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+				}
+			},
+		},
+		WatchDog:        nil,
+		ReleaseOnCancel: true,
+		Name:            ovnLeaderResource,
+	})
 }
 
 func checkPermission(config *controller.Configuration) error {

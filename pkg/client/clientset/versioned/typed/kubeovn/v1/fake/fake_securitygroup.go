@@ -19,115 +19,32 @@ limitations under the License.
 package fake
 
 import (
-	"context"
-
-	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
-	types "k8s.io/apimachinery/pkg/types"
-	watch "k8s.io/apimachinery/pkg/watch"
-	testing "k8s.io/client-go/testing"
+	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned/typed/kubeovn/v1"
+	gentype "k8s.io/client-go/gentype"
 )
 
-// FakeSecurityGroups implements SecurityGroupInterface
-type FakeSecurityGroups struct {
+// fakeSecurityGroups implements SecurityGroupInterface
+type fakeSecurityGroups struct {
+	*gentype.FakeClientWithList[*v1.SecurityGroup, *v1.SecurityGroupList]
 	Fake *FakeKubeovnV1
 }
 
-var securitygroupsResource = schema.GroupVersionResource{Group: "kubeovn.io", Version: "v1", Resource: "security-groups"}
-
-var securitygroupsKind = schema.GroupVersionKind{Group: "kubeovn.io", Version: "v1", Kind: "SecurityGroup"}
-
-// Get takes name of the securityGroup, and returns the corresponding securityGroup object, and an error if there is any.
-func (c *FakeSecurityGroups) Get(ctx context.Context, name string, options v1.GetOptions) (result *kubeovnv1.SecurityGroup, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootGetAction(securitygroupsResource, name), &kubeovnv1.SecurityGroup{})
-	if obj == nil {
-		return nil, err
+func newFakeSecurityGroups(fake *FakeKubeovnV1) kubeovnv1.SecurityGroupInterface {
+	return &fakeSecurityGroups{
+		gentype.NewFakeClientWithList[*v1.SecurityGroup, *v1.SecurityGroupList](
+			fake.Fake,
+			"",
+			v1.SchemeGroupVersion.WithResource("security-groups"),
+			v1.SchemeGroupVersion.WithKind("SecurityGroup"),
+			func() *v1.SecurityGroup { return &v1.SecurityGroup{} },
+			func() *v1.SecurityGroupList { return &v1.SecurityGroupList{} },
+			func(dst, src *v1.SecurityGroupList) { dst.ListMeta = src.ListMeta },
+			func(list *v1.SecurityGroupList) []*v1.SecurityGroup { return gentype.ToPointerSlice(list.Items) },
+			func(list *v1.SecurityGroupList, items []*v1.SecurityGroup) {
+				list.Items = gentype.FromPointerSlice(items)
+			},
+		),
+		fake,
 	}
-	return obj.(*kubeovnv1.SecurityGroup), err
-}
-
-// List takes label and field selectors, and returns the list of SecurityGroups that match those selectors.
-func (c *FakeSecurityGroups) List(ctx context.Context, opts v1.ListOptions) (result *kubeovnv1.SecurityGroupList, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootListAction(securitygroupsResource, securitygroupsKind, opts), &kubeovnv1.SecurityGroupList{})
-	if obj == nil {
-		return nil, err
-	}
-
-	label, _, _ := testing.ExtractFromListOptions(opts)
-	if label == nil {
-		label = labels.Everything()
-	}
-	list := &kubeovnv1.SecurityGroupList{ListMeta: obj.(*kubeovnv1.SecurityGroupList).ListMeta}
-	for _, item := range obj.(*kubeovnv1.SecurityGroupList).Items {
-		if label.Matches(labels.Set(item.Labels)) {
-			list.Items = append(list.Items, item)
-		}
-	}
-	return list, err
-}
-
-// Watch returns a watch.Interface that watches the requested securityGroups.
-func (c *FakeSecurityGroups) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-	return c.Fake.
-		InvokesWatch(testing.NewRootWatchAction(securitygroupsResource, opts))
-}
-
-// Create takes the representation of a securityGroup and creates it.  Returns the server's representation of the securityGroup, and an error, if there is any.
-func (c *FakeSecurityGroups) Create(ctx context.Context, securityGroup *kubeovnv1.SecurityGroup, opts v1.CreateOptions) (result *kubeovnv1.SecurityGroup, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootCreateAction(securitygroupsResource, securityGroup), &kubeovnv1.SecurityGroup{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.SecurityGroup), err
-}
-
-// Update takes the representation of a securityGroup and updates it. Returns the server's representation of the securityGroup, and an error, if there is any.
-func (c *FakeSecurityGroups) Update(ctx context.Context, securityGroup *kubeovnv1.SecurityGroup, opts v1.UpdateOptions) (result *kubeovnv1.SecurityGroup, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateAction(securitygroupsResource, securityGroup), &kubeovnv1.SecurityGroup{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.SecurityGroup), err
-}
-
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeSecurityGroups) UpdateStatus(ctx context.Context, securityGroup *kubeovnv1.SecurityGroup, opts v1.UpdateOptions) (*kubeovnv1.SecurityGroup, error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootUpdateSubresourceAction(securitygroupsResource, "status", securityGroup), &kubeovnv1.SecurityGroup{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.SecurityGroup), err
-}
-
-// Delete takes name of the securityGroup and deletes it. Returns an error if one occurs.
-func (c *FakeSecurityGroups) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
-	_, err := c.Fake.
-		Invokes(testing.NewRootDeleteActionWithOptions(securitygroupsResource, name, opts), &kubeovnv1.SecurityGroup{})
-	return err
-}
-
-// DeleteCollection deletes a collection of objects.
-func (c *FakeSecurityGroups) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewRootDeleteCollectionAction(securitygroupsResource, listOpts)
-
-	_, err := c.Fake.Invokes(action, &kubeovnv1.SecurityGroupList{})
-	return err
-}
-
-// Patch applies the patch and returns the patched securityGroup.
-func (c *FakeSecurityGroups) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *kubeovnv1.SecurityGroup, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewRootPatchSubresourceAction(securitygroupsResource, name, pt, data, subresources...), &kubeovnv1.SecurityGroup{})
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*kubeovnv1.SecurityGroup), err
 }

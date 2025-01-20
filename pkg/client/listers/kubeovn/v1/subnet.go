@@ -19,10 +19,10 @@ limitations under the License.
 package v1
 
 import (
-	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
 )
 
 // SubnetLister helps list Subnets.
@@ -30,39 +30,19 @@ import (
 type SubnetLister interface {
 	// List lists all Subnets in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1.Subnet, err error)
+	List(selector labels.Selector) (ret []*kubeovnv1.Subnet, err error)
 	// Get retrieves the Subnet from the index for a given name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1.Subnet, error)
+	Get(name string) (*kubeovnv1.Subnet, error)
 	SubnetListerExpansion
 }
 
 // subnetLister implements the SubnetLister interface.
 type subnetLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*kubeovnv1.Subnet]
 }
 
 // NewSubnetLister returns a new SubnetLister.
 func NewSubnetLister(indexer cache.Indexer) SubnetLister {
-	return &subnetLister{indexer: indexer}
-}
-
-// List lists all Subnets in the indexer.
-func (s *subnetLister) List(selector labels.Selector) (ret []*v1.Subnet, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1.Subnet))
-	})
-	return ret, err
-}
-
-// Get retrieves the Subnet from the index for a given name.
-func (s *subnetLister) Get(name string) (*v1.Subnet, error) {
-	obj, exists, err := s.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1.Resource("subnet"), name)
-	}
-	return obj.(*v1.Subnet), nil
+	return &subnetLister{listers.New[*kubeovnv1.Subnet](indexer, kubeovnv1.Resource("subnet"))}
 }

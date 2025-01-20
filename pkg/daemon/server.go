@@ -2,35 +2,37 @@ package daemon
 
 import (
 	"fmt"
-	"net"
 	"net/http"
-	"os"
+	"strconv"
 	"time"
 
 	"github.com/emicklei/go-restful/v3"
 	"k8s.io/klog/v2"
 
 	"github.com/kubeovn/kube-ovn/pkg/request"
+	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
-var requestLogString = "[%s] Incoming %s %s %s request"
-var responseLogString = "[%s] Outgoing response %s %s with %d status code in %vms"
+const (
+	requestLogFormat  = "[%s] Incoming %s %s %s request"
+	responseLogFormat = "[%s] Outgoing response %s %s with %d status code in %vms"
+)
 
 // RunServer runs the cniserver
 func RunServer(config *Configuration, controller *Controller) {
 	nodeName = config.NodeName
 	csh := createCniServerHandler(config, controller)
 	server := http.Server{
-		Handler: createHandler(csh),
+		Handler:           createHandler(csh),
+		ReadHeaderTimeout: 3 * time.Second,
 	}
-	unixListener, err := net.Listen("unix", config.BindSocket)
+	listener, cleanFunc, err := listen(config.BindSocket)
 	if err != nil {
-		klog.Errorf("bind socket to %s failed %v", config.BindSocket, err)
-		return
+		util.LogFatalAndExit(err, "failed to listen on %s", config.BindSocket)
 	}
-	defer os.Remove(config.BindSocket)
+	defer cleanFunc()
 	klog.Infof("start listen on %s", config.BindSocket)
-	klog.Fatal(server.Serve(unixListener))
+	util.LogFatalAndExit(server.Serve(listener), "failed to serve on %s", config.BindSocket)
 }
 
 func createHandler(csh *cniServerHandler) http.Handler {
@@ -59,27 +61,28 @@ func createHandler(csh *cniServerHandler) http.Handler {
 
 // web-service filter function used for request and response logging.
 func requestAndResponseLogger(request *restful.Request, response *restful.Response,
-	chain *restful.FilterChain) {
-	klog.Infof(formatRequestLog(request))
+	chain *restful.FilterChain,
+) {
+	klog.Info(formatRequestLog(request))
 	start := time.Now()
 	chain.ProcessFilter(request, response)
 	elapsed := float64((time.Since(start)) / time.Millisecond)
 	cniOperationHistogram.WithLabelValues(
 		nodeName,
 		getRequestURI(request),
-		fmt.Sprintf("%d", response.StatusCode())).Observe(elapsed / 1000)
-	klog.Infof(formatResponseLog(response, request, elapsed))
+		strconv.Itoa(response.StatusCode())).Observe(elapsed / 1000)
+	klog.Info(formatResponseLog(response, request, elapsed))
 }
 
 // formatRequestLog formats request log string.
 func formatRequestLog(request *restful.Request) string {
-	return fmt.Sprintf(requestLogString, time.Now().Format(time.RFC3339), request.Request.Proto,
+	return fmt.Sprintf(requestLogFormat, time.Now().Format(time.RFC3339), request.Request.Proto,
 		request.Request.Method, getRequestURI(request))
 }
 
 // formatResponseLog formats response log string.
 func formatResponseLog(response *restful.Response, request *restful.Request, reqTime float64) string {
-	return fmt.Sprintf(responseLogString, time.Now().Format(time.RFC3339),
+	return fmt.Sprintf(responseLogFormat, time.Now().Format(time.RFC3339),
 		request.Request.Method, getRequestURI(request), response.StatusCode(), reqTime)
 }
 

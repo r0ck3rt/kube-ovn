@@ -1,6 +1,9 @@
 package pinger
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
+)
 
 var (
 	ovsUpGauge = prometheus.NewGaugeVec(
@@ -68,7 +71,7 @@ var (
 		[]string{
 			"nodeName",
 		})
-	internalDnsHealthyGauge = prometheus.NewGaugeVec(
+	internalDNSHealthyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "pinger_internal_dns_healthy",
 			Help: "If the internal dns request is healthy on this node",
@@ -76,7 +79,7 @@ var (
 		[]string{
 			"nodeName",
 		})
-	internalDnsUnhealthyGauge = prometheus.NewGaugeVec(
+	internalDNSUnhealthyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "pinger_internal_dns_unhealthy",
 			Help: "If the internal dns request is unhealthy on this node",
@@ -84,7 +87,7 @@ var (
 		[]string{
 			"nodeName",
 		})
-	internalDnsRequestLatencyHistogram = prometheus.NewHistogramVec(
+	internalDNSRequestLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "pinger_internal_dns_latency_ms",
 			Help:    "The latency ms histogram the node request internal dns",
@@ -93,7 +96,7 @@ var (
 		[]string{
 			"nodeName",
 		})
-	externalDnsHealthyGauge = prometheus.NewGaugeVec(
+	externalDNSHealthyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "pinger_external_dns_healthy",
 			Help: "If the external dns request is healthy on this node",
@@ -101,7 +104,7 @@ var (
 		[]string{
 			"nodeName",
 		})
-	externalDnsUnhealthyGauge = prometheus.NewGaugeVec(
+	externalDNSUnhealthyGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "pinger_external_dns_unhealthy",
 			Help: "If the external dns request is unhealthy on this node",
@@ -109,7 +112,7 @@ var (
 		[]string{
 			"nodeName",
 		})
-	externalDnsRequestLatencyHistogram = prometheus.NewHistogramVec(
+	externalDNSRequestLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "pinger_external_dns_latency_ms",
 			Help:    "The latency ms histogram the node request external dns",
@@ -205,7 +208,7 @@ var (
 		})
 	externalPingLostCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "pinger_node_external_lost_total",
+			Name: "pinger_external_ping_lost_total",
 			Help: "The lost count for pod ping external address",
 		}, []string{
 			"src_node_name",
@@ -625,75 +628,87 @@ var (
 			"hostname",
 			"interfaceName",
 		})
+
+	interfaceStatRxMulticastPackets = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: metricNamespace,
+			Name:      "interface_rx_multicast_packets",
+			Help:      "Represents the count of multicast packets received by OVS interface.",
+		},
+		[]string{
+			"hostname",
+			"interfaceName",
+		})
 )
 
 func InitPingerMetrics() {
-	prometheus.MustRegister(ovsUpGauge)
-	prometheus.MustRegister(ovsDownGauge)
-	prometheus.MustRegister(ovnControllerUpGauge)
-	prometheus.MustRegister(ovnControllerDownGauge)
-	prometheus.MustRegister(inconsistentPortBindingGauge)
-	prometheus.MustRegister(apiserverHealthyGauge)
-	prometheus.MustRegister(apiserverUnhealthyGauge)
-	prometheus.MustRegister(apiserverRequestLatencyHistogram)
-	prometheus.MustRegister(internalDnsHealthyGauge)
-	prometheus.MustRegister(internalDnsUnhealthyGauge)
-	prometheus.MustRegister(internalDnsRequestLatencyHistogram)
-	prometheus.MustRegister(externalDnsHealthyGauge)
-	prometheus.MustRegister(externalDnsUnhealthyGauge)
-	prometheus.MustRegister(externalDnsRequestLatencyHistogram)
-	prometheus.MustRegister(podPingLatencyHistogram)
-	prometheus.MustRegister(podPingLostCounter)
-	prometheus.MustRegister(podPingTotalCounter)
-	prometheus.MustRegister(nodePingLatencyHistogram)
-	prometheus.MustRegister(nodePingLostCounter)
-	prometheus.MustRegister(nodePingTotalCounter)
-	prometheus.MustRegister(externalPingLatencyHistogram)
-	prometheus.MustRegister(externalPingLostCounter)
+	metrics.Registry.MustRegister(ovsUpGauge)
+	metrics.Registry.MustRegister(ovsDownGauge)
+	metrics.Registry.MustRegister(ovnControllerUpGauge)
+	metrics.Registry.MustRegister(ovnControllerDownGauge)
+	metrics.Registry.MustRegister(inconsistentPortBindingGauge)
+	metrics.Registry.MustRegister(apiserverHealthyGauge)
+	metrics.Registry.MustRegister(apiserverUnhealthyGauge)
+	metrics.Registry.MustRegister(apiserverRequestLatencyHistogram)
+	metrics.Registry.MustRegister(internalDNSHealthyGauge)
+	metrics.Registry.MustRegister(internalDNSUnhealthyGauge)
+	metrics.Registry.MustRegister(internalDNSRequestLatencyHistogram)
+	metrics.Registry.MustRegister(externalDNSHealthyGauge)
+	metrics.Registry.MustRegister(externalDNSUnhealthyGauge)
+	metrics.Registry.MustRegister(externalDNSRequestLatencyHistogram)
+	metrics.Registry.MustRegister(podPingLatencyHistogram)
+	metrics.Registry.MustRegister(podPingLostCounter)
+	metrics.Registry.MustRegister(podPingTotalCounter)
+	metrics.Registry.MustRegister(nodePingLatencyHistogram)
+	metrics.Registry.MustRegister(nodePingLostCounter)
+	metrics.Registry.MustRegister(nodePingTotalCounter)
+	metrics.Registry.MustRegister(externalPingLatencyHistogram)
+	metrics.Registry.MustRegister(externalPingLostCounter)
 
 	// ovs status metrics
-	prometheus.MustRegister(metricOvsHealthyStatus)
-	prometheus.MustRegister(metricOvsInfo)
-	prometheus.MustRegister(metricRequestErrorNums)
-	prometheus.MustRegister(metricLogFileSize)
-	prometheus.MustRegister(metricDbFileSize)
+	metrics.Registry.MustRegister(metricOvsHealthyStatus)
+	metrics.Registry.MustRegister(metricOvsInfo)
+	metrics.Registry.MustRegister(metricRequestErrorNums)
+	metrics.Registry.MustRegister(metricLogFileSize)
+	metrics.Registry.MustRegister(metricDbFileSize)
 
 	// ovs datapath metrics
-	prometheus.MustRegister(metricOvsDp)
-	prometheus.MustRegister(metricOvsDpTotal)
-	prometheus.MustRegister(metricOvsDpIf)
-	prometheus.MustRegister(metricOvsDpIfTotal)
-	prometheus.MustRegister(metricOvsDpFlowsTotal)
-	prometheus.MustRegister(metricOvsDpFlowsLookupHit)
-	prometheus.MustRegister(metricOvsDpFlowsLookupMissed)
-	prometheus.MustRegister(metricOvsDpFlowsLookupLost)
-	prometheus.MustRegister(metricOvsDpMasksHit)
-	prometheus.MustRegister(metricOvsDpMasksTotal)
-	prometheus.MustRegister(metricOvsDpMasksHitRatio)
+	metrics.Registry.MustRegister(metricOvsDp)
+	metrics.Registry.MustRegister(metricOvsDpTotal)
+	metrics.Registry.MustRegister(metricOvsDpIf)
+	metrics.Registry.MustRegister(metricOvsDpIfTotal)
+	metrics.Registry.MustRegister(metricOvsDpFlowsTotal)
+	metrics.Registry.MustRegister(metricOvsDpFlowsLookupHit)
+	metrics.Registry.MustRegister(metricOvsDpFlowsLookupMissed)
+	metrics.Registry.MustRegister(metricOvsDpFlowsLookupLost)
+	metrics.Registry.MustRegister(metricOvsDpMasksHit)
+	metrics.Registry.MustRegister(metricOvsDpMasksTotal)
+	metrics.Registry.MustRegister(metricOvsDpMasksHitRatio)
 
 	// ovs Interface basic info metrics
-	prometheus.MustRegister(interfaceMain)
-	prometheus.MustRegister(interfaceAdminState)
-	prometheus.MustRegister(interfaceLinkState)
-	prometheus.MustRegister(interfaceMacInUse)
-	prometheus.MustRegister(interfaceMtu)
-	prometheus.MustRegister(interfaceOfPort)
-	prometheus.MustRegister(interfaceIfIndex)
+	metrics.Registry.MustRegister(interfaceMain)
+	metrics.Registry.MustRegister(interfaceAdminState)
+	metrics.Registry.MustRegister(interfaceLinkState)
+	metrics.Registry.MustRegister(interfaceMacInUse)
+	metrics.Registry.MustRegister(interfaceMtu)
+	metrics.Registry.MustRegister(interfaceOfPort)
+	metrics.Registry.MustRegister(interfaceIfIndex)
 
 	// ovs Interface statistics metrics
-	prometheus.MustRegister(interfaceStatTxPackets)
-	prometheus.MustRegister(interfaceStatTxBytes)
-	prometheus.MustRegister(interfaceStatRxPackets)
-	prometheus.MustRegister(interfaceStatRxBytes)
-	prometheus.MustRegister(interfaceStatRxCrcError)
-	prometheus.MustRegister(interfaceStatRxDropped)
-	prometheus.MustRegister(interfaceStatRxErrorsTotal)
-	prometheus.MustRegister(interfaceStatRxFrameError)
-	prometheus.MustRegister(interfaceStatRxMissedError)
-	prometheus.MustRegister(interfaceStatRxOverrunError)
-	prometheus.MustRegister(interfaceStatTxDropped)
-	prometheus.MustRegister(interfaceStatTxErrorsTotal)
-	prometheus.MustRegister(interfaceStatCollisions)
+	metrics.Registry.MustRegister(interfaceStatTxPackets)
+	metrics.Registry.MustRegister(interfaceStatTxBytes)
+	metrics.Registry.MustRegister(interfaceStatRxPackets)
+	metrics.Registry.MustRegister(interfaceStatRxBytes)
+	metrics.Registry.MustRegister(interfaceStatRxCrcError)
+	metrics.Registry.MustRegister(interfaceStatRxDropped)
+	metrics.Registry.MustRegister(interfaceStatRxErrorsTotal)
+	metrics.Registry.MustRegister(interfaceStatRxFrameError)
+	metrics.Registry.MustRegister(interfaceStatRxMissedError)
+	metrics.Registry.MustRegister(interfaceStatRxOverrunError)
+	metrics.Registry.MustRegister(interfaceStatTxDropped)
+	metrics.Registry.MustRegister(interfaceStatTxErrorsTotal)
+	metrics.Registry.MustRegister(interfaceStatCollisions)
+	metrics.Registry.MustRegister(interfaceStatRxMulticastPackets)
 }
 
 func SetOvsUpMetrics(nodeName string) {
@@ -727,26 +742,26 @@ func SetApiserverUnhealthyMetrics(nodeName string) {
 	apiserverUnhealthyGauge.WithLabelValues(nodeName).Set(1)
 }
 
-func SetInternalDnsHealthyMetrics(nodeName string, latency float64) {
-	internalDnsHealthyGauge.WithLabelValues(nodeName).Set(1)
-	internalDnsRequestLatencyHistogram.WithLabelValues(nodeName).Observe(latency)
-	internalDnsUnhealthyGauge.WithLabelValues(nodeName).Set(0)
+func SetInternalDNSHealthyMetrics(nodeName string, latency float64) {
+	internalDNSHealthyGauge.WithLabelValues(nodeName).Set(1)
+	internalDNSRequestLatencyHistogram.WithLabelValues(nodeName).Observe(latency)
+	internalDNSUnhealthyGauge.WithLabelValues(nodeName).Set(0)
 }
 
-func SetInternalDnsUnhealthyMetrics(nodeName string) {
-	internalDnsHealthyGauge.WithLabelValues(nodeName).Set(0)
-	internalDnsUnhealthyGauge.WithLabelValues(nodeName).Set(1)
+func SetInternalDNSUnhealthyMetrics(nodeName string) {
+	internalDNSHealthyGauge.WithLabelValues(nodeName).Set(0)
+	internalDNSUnhealthyGauge.WithLabelValues(nodeName).Set(1)
 }
 
-func SetExternalDnsHealthyMetrics(nodeName string, latency float64) {
-	externalDnsHealthyGauge.WithLabelValues(nodeName).Set(1)
-	externalDnsRequestLatencyHistogram.WithLabelValues(nodeName).Observe(latency)
-	externalDnsUnhealthyGauge.WithLabelValues(nodeName).Set(0)
+func SetExternalDNSHealthyMetrics(nodeName string, latency float64) {
+	externalDNSHealthyGauge.WithLabelValues(nodeName).Set(1)
+	externalDNSRequestLatencyHistogram.WithLabelValues(nodeName).Observe(latency)
+	externalDNSUnhealthyGauge.WithLabelValues(nodeName).Set(0)
 }
 
-func SetExternalDnsUnhealthyMetrics(nodeName string) {
-	externalDnsHealthyGauge.WithLabelValues(nodeName).Set(0)
-	externalDnsUnhealthyGauge.WithLabelValues(nodeName).Set(1)
+func SetExternalDNSUnhealthyMetrics(nodeName string) {
+	externalDNSHealthyGauge.WithLabelValues(nodeName).Set(0)
+	externalDNSUnhealthyGauge.WithLabelValues(nodeName).Set(1)
 }
 
 func SetPodPingMetrics(srcNodeName, srcNodeIP, srcPodIP, targetNodeName, targetNodeIP, targetPodIP string, latency float64, lost, total int) {

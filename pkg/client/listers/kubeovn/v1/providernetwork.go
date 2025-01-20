@@ -19,10 +19,10 @@ limitations under the License.
 package v1
 
 import (
-	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
 )
 
 // ProviderNetworkLister helps list ProviderNetworks.
@@ -30,39 +30,19 @@ import (
 type ProviderNetworkLister interface {
 	// List lists all ProviderNetworks in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1.ProviderNetwork, err error)
+	List(selector labels.Selector) (ret []*kubeovnv1.ProviderNetwork, err error)
 	// Get retrieves the ProviderNetwork from the index for a given name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1.ProviderNetwork, error)
+	Get(name string) (*kubeovnv1.ProviderNetwork, error)
 	ProviderNetworkListerExpansion
 }
 
 // providerNetworkLister implements the ProviderNetworkLister interface.
 type providerNetworkLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*kubeovnv1.ProviderNetwork]
 }
 
 // NewProviderNetworkLister returns a new ProviderNetworkLister.
 func NewProviderNetworkLister(indexer cache.Indexer) ProviderNetworkLister {
-	return &providerNetworkLister{indexer: indexer}
-}
-
-// List lists all ProviderNetworks in the indexer.
-func (s *providerNetworkLister) List(selector labels.Selector) (ret []*v1.ProviderNetwork, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1.ProviderNetwork))
-	})
-	return ret, err
-}
-
-// Get retrieves the ProviderNetwork from the index for a given name.
-func (s *providerNetworkLister) Get(name string) (*v1.ProviderNetwork, error) {
-	obj, exists, err := s.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1.Resource("providernetwork"), name)
-	}
-	return obj.(*v1.ProviderNetwork), nil
+	return &providerNetworkLister{listers.New[*kubeovnv1.ProviderNetwork](indexer, kubeovnv1.Resource("providernetwork"))}
 }

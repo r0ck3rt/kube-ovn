@@ -1,14 +1,16 @@
 package ovnmonitor
 
 import (
+	"flag"
+
 	"github.com/spf13/pflag"
 	"k8s.io/klog/v2"
+
+	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
 // Configuration contains parameters information.
 type Configuration struct {
-	ListenAddress                   string
-	MetricsPath                     string
 	PollTimeout                     int
 	PollInterval                    int
 	SystemRunDir                    string
@@ -40,15 +42,19 @@ type Configuration struct {
 	ServiceVswitchdFilePidPath      string
 	ServiceNorthdFileLogPath        string
 	ServiceNorthdFilePidPath        string
+	EnableMetrics                   bool
+	SecureServing                   bool
+	MetricsPort                     int32
 }
 
 // ParseFlags get parameters information.
 func ParseFlags() (*Configuration, error) {
 	var (
-		argListenAddress = pflag.String("listen-address", ":10661", "Address to listen on for web interface and telemetry.")
-		argMetricsPath   = pflag.String("telemetry-path", "/metrics", "Path under which to expose metrics.")
 		argPollTimeout   = pflag.Int("ovs.timeout", 2, "Timeout on JSON-RPC requests to OVN.")
 		argPollInterval  = pflag.Int("ovs.poll-interval", 30, "The minimum interval (in seconds) between collections from OVN server.")
+		argEnableMetrics = pflag.Bool("enable-metrics", true, "Whether to support metrics query")
+		argSecureServing = pflag.Bool("secure-serving", false, "Whether to serve metrics securely")
+		argMetricsPort   = pflag.Int32("metrics-port", 10661, "The port to get metrics data")
 
 		argSystemRunDir                    = pflag.String("system.run.dir", "/var/run/openvswitch", "OVS default run directory.")
 		argDatabaseVswitchName             = pflag.String("database.vswitch.name", "Open_vSwitch", "The name of OVS db.")
@@ -84,11 +90,25 @@ func ParseFlags() (*Configuration, error) {
 		argServiceNorthdFilePidPath   = pflag.String("service.ovn.northd.file.pid.path", "/var/run/ovn/ovn-northd.pid", "OVN northd daemon process id file.")
 	)
 
+	klogFlags := flag.NewFlagSet("klog", flag.ExitOnError)
+	klog.InitFlags(klogFlags)
+
+	// Sync the glog and klog flags.
+	pflag.CommandLine.VisitAll(func(f1 *pflag.Flag) {
+		f2 := klogFlags.Lookup(f1.Name)
+		if f2 != nil {
+			value := f1.Value.String()
+			if err := f2.Value.Set(value); err != nil {
+				util.LogFatalAndExit(err, "failed to set flag")
+			}
+		}
+	})
+
+	pflag.CommandLine.AddGoFlagSet(klogFlags)
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
 
 	config := &Configuration{
-		ListenAddress:                   *argListenAddress,
-		MetricsPath:                     *argMetricsPath,
 		PollTimeout:                     *argPollTimeout,
 		PollInterval:                    *argPollInterval,
 		SystemRunDir:                    *argSystemRunDir,
@@ -121,6 +141,9 @@ func ParseFlags() (*Configuration, error) {
 		ServiceVswitchdFilePidPath:      *argServiceVswitchdFilePidPath,
 		ServiceNorthdFileLogPath:        *argServiceNorthdFileLogPath,
 		ServiceNorthdFilePidPath:        *argServiceNorthdFilePidPath,
+		EnableMetrics:                   *argEnableMetrics,
+		SecureServing:                   *argSecureServing,
+		MetricsPort:                     *argMetricsPort,
 	}
 
 	klog.Infof("ovn monitor config is %+v", config)

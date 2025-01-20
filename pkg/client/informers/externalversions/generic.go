@@ -19,7 +19,7 @@ limitations under the License.
 package externalversions
 
 import (
-	"fmt"
+	fmt "fmt"
 
 	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,20 +53,46 @@ func (f *genericInformer) Lister() cache.GenericLister {
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
 	// Group=kubeovn.io, Version=v1
-	case v1.SchemeGroupVersion.WithResource("htbqoses"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().HtbQoses().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("ips"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().IPs().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("ippools"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().IPPools().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("iptables-dnat-rules"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().IptablesDnatRules().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("iptables-eips"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().IptablesEIPs().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("iptables-fip-rules"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().IptablesFIPRules().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("iptables-snat-rules"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().IptablesSnatRules().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("ovn-dnat-rules"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().OvnDnatRules().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("ovn-eips"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().OvnEips().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("ovn-fips"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().OvnFips().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("ovn-snat-rules"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().OvnSnatRules().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("provider-networks"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().ProviderNetworks().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("qos-policies"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().QoSPolicies().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("security-groups"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().SecurityGroups().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("subnets"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().Subnets().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("switch-lb-rules"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().SwitchLBRules().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("vips"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().Vips().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("vlans"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().Vlans().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("vpcs"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().Vpcs().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("vpc-dnses"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().VpcDnses().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("vpc-egress-gateways"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().VpcEgressGateways().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("vpc-nat-gateways"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Kubeovn().V1().VpcNatGateways().Informer()}, nil
 

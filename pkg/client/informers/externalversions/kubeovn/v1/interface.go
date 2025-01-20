@@ -24,20 +24,46 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// HtbQoses returns a HtbQosInformer.
-	HtbQoses() HtbQosInformer
 	// IPs returns a IPInformer.
 	IPs() IPInformer
+	// IPPools returns a IPPoolInformer.
+	IPPools() IPPoolInformer
+	// IptablesDnatRules returns a IptablesDnatRuleInformer.
+	IptablesDnatRules() IptablesDnatRuleInformer
+	// IptablesEIPs returns a IptablesEIPInformer.
+	IptablesEIPs() IptablesEIPInformer
+	// IptablesFIPRules returns a IptablesFIPRuleInformer.
+	IptablesFIPRules() IptablesFIPRuleInformer
+	// IptablesSnatRules returns a IptablesSnatRuleInformer.
+	IptablesSnatRules() IptablesSnatRuleInformer
+	// OvnDnatRules returns a OvnDnatRuleInformer.
+	OvnDnatRules() OvnDnatRuleInformer
+	// OvnEips returns a OvnEipInformer.
+	OvnEips() OvnEipInformer
+	// OvnFips returns a OvnFipInformer.
+	OvnFips() OvnFipInformer
+	// OvnSnatRules returns a OvnSnatRuleInformer.
+	OvnSnatRules() OvnSnatRuleInformer
 	// ProviderNetworks returns a ProviderNetworkInformer.
 	ProviderNetworks() ProviderNetworkInformer
+	// QoSPolicies returns a QoSPolicyInformer.
+	QoSPolicies() QoSPolicyInformer
 	// SecurityGroups returns a SecurityGroupInformer.
 	SecurityGroups() SecurityGroupInformer
 	// Subnets returns a SubnetInformer.
 	Subnets() SubnetInformer
+	// SwitchLBRules returns a SwitchLBRuleInformer.
+	SwitchLBRules() SwitchLBRuleInformer
+	// Vips returns a VipInformer.
+	Vips() VipInformer
 	// Vlans returns a VlanInformer.
 	Vlans() VlanInformer
 	// Vpcs returns a VpcInformer.
 	Vpcs() VpcInformer
+	// VpcDnses returns a VpcDnsInformer.
+	VpcDnses() VpcDnsInformer
+	// VpcEgressGateways returns a VpcEgressGatewayInformer.
+	VpcEgressGateways() VpcEgressGatewayInformer
 	// VpcNatGateways returns a VpcNatGatewayInformer.
 	VpcNatGateways() VpcNatGatewayInformer
 }
@@ -53,19 +79,64 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
 }
 
-// HtbQoses returns a HtbQosInformer.
-func (v *version) HtbQoses() HtbQosInformer {
-	return &htbQosInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
-}
-
 // IPs returns a IPInformer.
 func (v *version) IPs() IPInformer {
 	return &iPInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
+// IPPools returns a IPPoolInformer.
+func (v *version) IPPools() IPPoolInformer {
+	return &iPPoolInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// IptablesDnatRules returns a IptablesDnatRuleInformer.
+func (v *version) IptablesDnatRules() IptablesDnatRuleInformer {
+	return &iptablesDnatRuleInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// IptablesEIPs returns a IptablesEIPInformer.
+func (v *version) IptablesEIPs() IptablesEIPInformer {
+	return &iptablesEIPInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// IptablesFIPRules returns a IptablesFIPRuleInformer.
+func (v *version) IptablesFIPRules() IptablesFIPRuleInformer {
+	return &iptablesFIPRuleInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// IptablesSnatRules returns a IptablesSnatRuleInformer.
+func (v *version) IptablesSnatRules() IptablesSnatRuleInformer {
+	return &iptablesSnatRuleInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// OvnDnatRules returns a OvnDnatRuleInformer.
+func (v *version) OvnDnatRules() OvnDnatRuleInformer {
+	return &ovnDnatRuleInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// OvnEips returns a OvnEipInformer.
+func (v *version) OvnEips() OvnEipInformer {
+	return &ovnEipInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// OvnFips returns a OvnFipInformer.
+func (v *version) OvnFips() OvnFipInformer {
+	return &ovnFipInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// OvnSnatRules returns a OvnSnatRuleInformer.
+func (v *version) OvnSnatRules() OvnSnatRuleInformer {
+	return &ovnSnatRuleInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
 // ProviderNetworks returns a ProviderNetworkInformer.
 func (v *version) ProviderNetworks() ProviderNetworkInformer {
 	return &providerNetworkInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// QoSPolicies returns a QoSPolicyInformer.
+func (v *version) QoSPolicies() QoSPolicyInformer {
+	return &qoSPolicyInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // SecurityGroups returns a SecurityGroupInformer.
@@ -78,6 +149,16 @@ func (v *version) Subnets() SubnetInformer {
 	return &subnetInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
+// SwitchLBRules returns a SwitchLBRuleInformer.
+func (v *version) SwitchLBRules() SwitchLBRuleInformer {
+	return &switchLBRuleInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// Vips returns a VipInformer.
+func (v *version) Vips() VipInformer {
+	return &vipInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
 // Vlans returns a VlanInformer.
 func (v *version) Vlans() VlanInformer {
 	return &vlanInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
@@ -86,6 +167,16 @@ func (v *version) Vlans() VlanInformer {
 // Vpcs returns a VpcInformer.
 func (v *version) Vpcs() VpcInformer {
 	return &vpcInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// VpcDnses returns a VpcDnsInformer.
+func (v *version) VpcDnses() VpcDnsInformer {
+	return &vpcDnsInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// VpcEgressGateways returns a VpcEgressGatewayInformer.
+func (v *version) VpcEgressGateways() VpcEgressGatewayInformer {
+	return &vpcEgressGatewayInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // VpcNatGateways returns a VpcNatGatewayInformer.

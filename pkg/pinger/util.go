@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/greenpau/ovsdb"
+	"github.com/kubeovn/ovsdb"
 	"k8s.io/klog/v2"
 )
 
@@ -41,10 +41,10 @@ func (e *Exporter) getOvsStatus() map[string]bool {
 func (e *Exporter) getOvsDatapath() ([]string, error) {
 	var datapathsList []string
 	cmdstr := fmt.Sprintf("ovs-appctl -T %v dpctl/dump-dps", e.Client.Timeout)
-	cmd := exec.Command("sh", "-c", cmdstr)
+	cmd := exec.Command("sh", "-c", cmdstr) // #nosec G204
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get output of dpctl/dump-dps: %v", err)
+		return nil, fmt.Errorf("failed to get output of dpctl/dump-dps: %w", err)
 	}
 
 	for _, kvPair := range strings.Split(string(output), "\n") {
@@ -67,23 +67,24 @@ func (e *Exporter) getOvsDatapath() ([]string, error) {
 
 func (e *Exporter) setOvsDpIfMetric(datapathName string) error {
 	cmdstr := fmt.Sprintf("ovs-appctl -T %v dpctl/show %s", e.Client.Timeout, datapathName)
-	cmd := exec.Command("sh", "-c", cmdstr)
+	cmd := exec.Command("sh", "-c", cmdstr) // #nosec G204
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to get output of dpctl/show %s: %v", datapathName, err)
+		return fmt.Errorf("failed to get output of dpctl/show %s: %w", datapathName, err)
 	}
 
 	var datapathPortCount float64
 	for _, kvPair := range strings.Split(string(output), "\n") {
 		line := strings.TrimSpace(kvPair)
-		if strings.HasPrefix(line, "lookups:") {
+		switch {
+		case strings.HasPrefix(line, "lookups:"):
 			e.ovsDatapathLookupsMetrics(line, datapathName)
-		} else if strings.HasPrefix(line, "masks:") {
+		case strings.HasPrefix(line, "masks:"):
 			e.ovsDatapathMasksMetrics(line, datapathName)
-		} else if strings.HasPrefix(line, "port ") {
+		case strings.HasPrefix(line, "port "):
 			e.ovsDatapathPortMetrics(line, datapathName)
 			datapathPortCount++
-		} else if strings.HasPrefix(line, "flows:") {
+		case strings.HasPrefix(line, "flows:"):
 			flowFields := strings.Fields(line)
 			value, _ := strconv.ParseFloat(flowFields[1], 64)
 			metricOvsDpFlowsTotal.WithLabelValues(e.Client.System.Hostname, datapathName).Set(value)
@@ -226,8 +227,10 @@ func (e *Exporter) setOvsInterfaceStatisticsMetric(intf *ovsdb.OvsInterface) {
 			interfaceStatTxErrorsTotal.WithLabelValues(e.Client.System.Hostname, intf.Name).Set(float64(value))
 		case "collisions":
 			interfaceStatCollisions.WithLabelValues(e.Client.System.Hostname, intf.Name).Set(float64(value))
+		case "rx_multicast_packets":
+			interfaceStatRxMulticastPackets.WithLabelValues(e.Client.System.Hostname, intf.Name).Set(float64(value))
 		default:
-			klog.Errorf("OVS interface statistics has unsupported key: %s, value: %d", key, value)
+			klog.V(3).Infof("unknown statistics %s with value %d on OVS interface %s", key, value, intf.Name)
 		}
 	}
 }
@@ -271,4 +274,5 @@ func resetOvsInterfaceMetrics() {
 	interfaceStatTxDropped.Reset()
 	interfaceStatTxErrorsTotal.Reset()
 	interfaceStatCollisions.Reset()
+	interfaceStatRxMulticastPackets.Reset()
 }

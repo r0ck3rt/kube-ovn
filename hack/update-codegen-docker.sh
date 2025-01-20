@@ -2,16 +2,14 @@
 # useage: bash ./hack/update-codegen-docker.sh
 
 # set GOPROXY you like
-GOPROXY="https://goproxy.cn"
+GOPROXY=${GOPROXY:-"https://goproxy.cn"}
 
-PROJECT_PACKAGE=github.com/kubeovn/kube-ovn
 docker run -it --rm \
-    -v ${PWD}:/go/src/${PROJECT_PACKAGE}\
-    -v ${PWD}/hack/boilerplate.go.txt:/tmp/fake-boilerplate.txt \
-    -e PROJECT_PACKAGE=${PROJECT_PACKAGE} \
-    -e CLIENT_GENERATOR_OUT=${PROJECT_PACKAGE}/pkg/client \
-    -e APIS_ROOT=${PROJECT_PACKAGE}/pkg/apis \
-    -e GROUPS_VERSION="kubeovn:v1" \
-    -e GENERATION_TARGETS="deepcopy,client,informer,lister" \
+    -v ${PWD}:/app \
     -e GOPROXY=${GOPROXY} \
-    quay.io/slok/kube-code-generator:v1.23.0
+    ghcr.io/zhangzujian/kube-code-generator:v0.5.0 \
+    --boilerplate-path ./hack/boilerplate.go.txt \
+    --apis-in ./pkg/apis \
+    --go-gen-out ./pkg/client
+
+go mod tidy

@@ -29,11 +29,9 @@ function gen_conn_str {
   echo "$x"
 }
 
-if [[ "$ENABLE_SSL" == "false" ]]; then
-  export OVN_NB_DAEMON=$(ovn-nbctl --db="$(gen_conn_str 6641)" --pidfile --detach --overwrite-pidfile)
-else
-  export OVN_NB_DAEMON=$(ovn-nbctl -p /var/run/tls/key -c /var/run/tls/cert -C /var/run/tls/cacert --db="$(gen_conn_str 6641)" --pidfile --detach --overwrite-pidfile)
-fi
-exec ./kube-ovn-controller --ovn-nb-addr="$(gen_conn_str 6641)" \
-                           --ovn-sb-addr="$(gen_conn_str 6642)" \
+nb_addr="$(gen_conn_str 6641)"
+sb_addr="$(gen_conn_str 6642)"
+
+exec ./kube-ovn-controller --ovn-nb-addr="$nb_addr" \
+                           --ovn-sb-addr="$sb_addr" \
                            $@

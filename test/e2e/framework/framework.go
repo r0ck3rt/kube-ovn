@@ -1,327 +1,267 @@
 package framework
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
+	"os"
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	nad "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/remotecommand"
-	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/test/e2e/framework"
+	"k8s.io/kubernetes/test/utils/format"
+	admissionapi "k8s.io/pod-security-admission/api"
+	"kubevirt.io/client-go/kubecli"
 
-	. "github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/v2"
 
-	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	clientset "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned"
+	kubeovncs "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned"
+	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
-type Framework struct {
-	BaseName         string
-	KubeOvnNamespace string
-	KubeClientSet    kubernetes.Interface
-	OvnClientSet     clientset.Interface
-	KubeConfig       *rest.Config
+const (
+	IPv4 = "ipv4"
+	IPv6 = "ipv6"
+	Dual = "dual"
+)
+
+const (
+	// poll is how often to Poll resources.
+	poll = 2 * time.Second
+
+	timeout = 2 * time.Minute
+)
+
+func LoadKubeOVNClientSet() (*kubeovncs.Clientset, error) {
+	config, err := framework.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	config.QPS = 20
+	config.Burst = 50
+	return kubeovncs.NewForConfig(config)
 }
 
-func NewFramework(baseName, kubeConfig string) *Framework {
-	f := &Framework{BaseName: baseName}
+type Framework struct {
+	KubeContext string
+	*framework.Framework
+	KubeOVNClientSet  kubeovncs.Interface
+	KubeVirtClientSet kubecli.KubevirtClient
+	AttachNetClient   nad.Interface
+	// master/release-1.10/...
+	ClusterVersion string
+	// 999.999 for master
+	ClusterVersionMajor uint
+	ClusterVersionMinor uint
+	// ipv4/ipv6/dual
+	ClusterIPFamily string
+	// overlay/underlay/underlay-hairpin
+	ClusterNetworkMode string
+	KubeOVNImage       string
+}
 
-	cfg, err := clientcmd.BuildConfigFromFlags("", kubeConfig)
+func dumpEvents(ctx context.Context, f *framework.Framework, namespace string) {
+	ginkgo.By("Dumping events in namespace " + namespace)
+	events, err := f.ClientSet.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		panic(err.Error())
+		Logf("Failed to get events: %v", err)
+		return
 	}
-	f.KubeConfig = cfg
+	for _, event := range events.Items {
+		event.ManagedFields = nil
+		fmt.Fprintln(ginkgo.GinkgoWriter, format.Object(event, 2))
+	}
+}
 
-	cfg.QPS = 1000
-	cfg.Burst = 2000
-	kubeClient, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		panic(err.Error())
+func NewDefaultFramework(baseName string) *Framework {
+	f := &Framework{
+		Framework: framework.NewDefaultFramework(baseName),
+	}
+	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityWarnLevel = admissionapi.LevelPrivileged
+	f.DumpAllNamespaceInfo = dumpEvents
+	f.ClusterIPFamily = os.Getenv("E2E_IP_FAMILY")
+	f.ClusterVersion = os.Getenv("E2E_BRANCH")
+	f.ClusterNetworkMode = os.Getenv("E2E_NETWORK_MODE")
+
+	if strings.HasPrefix(f.ClusterVersion, "release-") {
+		n, err := fmt.Sscanf(f.ClusterVersion, "release-%d.%d", &f.ClusterVersionMajor, &f.ClusterVersionMinor)
+		if err != nil || n != 2 {
+			defer ginkgo.GinkgoRecover()
+			ginkgo.Fail(fmt.Sprintf("Failed to parse Kube-OVN version string %q", f.ClusterVersion))
+		}
+	} else {
+		f.ClusterVersionMajor, f.ClusterVersionMinor = 999, 999
 	}
 
-	f.KubeClientSet = kubeClient
+	ginkgo.BeforeEach(f.BeforeEach)
 
-	kubeOvnClient, err := clientset.NewForConfig(cfg)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	f.OvnClientSet = kubeOvnClient
 	return f
 }
 
-func (f *Framework) GetName() string {
-	return strings.Replace(CurrentGinkgoTestDescription().TestText, " ", "-", -1)
-}
-
-func (f *Framework) WaitProviderNetworkReady(providerNetwork string) error {
-	for {
-		time.Sleep(1 * time.Second)
-
-		pn, err := f.OvnClientSet.KubeovnV1().ProviderNetworks().Get(context.Background(), providerNetwork, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		if pn.Status.Ready {
-			return nil
-		}
-	}
-}
-
-func (f *Framework) WaitSubnetReady(subnet string) error {
-	for {
-		time.Sleep(1 * time.Second)
-		s, err := f.OvnClientSet.KubeovnV1().Subnets().Get(context.Background(), subnet, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		if s.Status.IsReady() {
-			return nil
-		}
-		if s.Status.IsNotValidated() && s.Status.ConditionReason(v1.Validated) != "" {
-			return fmt.Errorf(s.Status.ConditionReason(v1.Validated))
-		}
-	}
-}
-
-func (f *Framework) WaitPodReady(pod, namespace string) (*corev1.Pod, error) {
-	for {
-		time.Sleep(1 * time.Second)
-		p, err := f.KubeClientSet.CoreV1().Pods(namespace).Get(context.Background(), pod, metav1.GetOptions{})
-		if err != nil {
-			return nil, err
-		}
-		if p.Status.Phase == "Running" && p.Status.Reason != "" {
-			return p, nil
-		}
-
-		switch getPodStatus(*p) {
-		case Completed:
-			return nil, fmt.Errorf("pod already completed")
-		case Running:
-			return p, nil
-		case Initing, Pending, PodInitializing, ContainerCreating, Terminating:
-			continue
-		default:
-			klog.Info(p.String())
-			return nil, fmt.Errorf("pod status failed")
-		}
-	}
-}
-
-func (f *Framework) WaitPodDeleted(pod, namespace string) error {
-	for {
-		time.Sleep(1 * time.Second)
-		p, err := f.KubeClientSet.CoreV1().Pods(namespace).Get(context.Background(), pod, metav1.GetOptions{})
-		if err != nil {
-			if k8serrors.IsNotFound(err) {
-				return nil
-			}
-			return err
-		}
-
-		if status := getPodStatus(*p); status != Terminating {
-			return fmt.Errorf("unexpected pod status: %s", status)
-		}
-	}
-}
-
-func (f *Framework) WaitDeploymentReady(deployment, namespace string) error {
-	for {
-		time.Sleep(1 * time.Second)
-		deploy, err := f.KubeClientSet.AppsV1().Deployments(namespace).Get(context.Background(), deployment, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		if deploy.Status.ReadyReplicas != *deploy.Spec.Replicas {
-			continue
-		}
-
-		pods, err := f.KubeClientSet.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{LabelSelector: labels.SelectorFromSet(deploy.Spec.Template.Labels).String()})
-		if err != nil {
-			return err
-		}
-
-		ready := true
-		for _, pod := range pods.Items {
-			switch getPodStatus(pod) {
-			case Completed:
-				return fmt.Errorf("pod already completed")
-			case Running:
-				continue
-			case Initing, Pending, PodInitializing, ContainerCreating, Terminating:
-				ready = false
-			default:
-				klog.Info(pod.String())
-				return fmt.Errorf("pod status failed")
-			}
-		}
-		if ready {
-			return nil
-		}
-	}
-}
-
-func (f *Framework) WaitStatefulsetReady(statefulset, namespace string) error {
-	for {
-		time.Sleep(1 * time.Second)
-		ss, err := f.KubeClientSet.AppsV1().StatefulSets(namespace).Get(context.Background(), statefulset, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		if ss.Status.ReadyReplicas != *ss.Spec.Replicas {
-			continue
-		}
-
-		pods, err := f.KubeClientSet.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{LabelSelector: labels.SelectorFromSet(ss.Spec.Template.Labels).String()})
-		if err != nil {
-			return err
-		}
-
-		ready := true
-		for _, pod := range pods.Items {
-			switch getPodStatus(pod) {
-			case Completed:
-				return fmt.Errorf("pod already completed")
-			case Running:
-				continue
-			case Initing, Pending, PodInitializing, ContainerCreating, Terminating:
-				ready = false
-			default:
-				klog.Info(pod.String())
-				return fmt.Errorf("pod status failed")
-			}
-		}
-		if ready {
-			return nil
-		}
-	}
-}
-
-func (f *Framework) ExecToPodThroughAPI(command, containerName, podName, namespace string, stdin io.Reader) (string, string, error) {
-	req := f.KubeClientSet.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(podName).
-		Namespace(namespace).
-		SubResource("exec")
-	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		return "", "", fmt.Errorf("error adding to scheme: %v", err)
+func (f *Framework) useContext() error {
+	if f.KubeContext == "" {
+		return nil
 	}
 
-	parameterCodec := runtime.NewParameterCodec(scheme)
-	req.VersionedParams(&corev1.PodExecOptions{
-		Command:   strings.Fields(command),
-		Container: containerName,
-		Stdin:     stdin != nil,
-		Stdout:    true,
-		Stderr:    true,
-		TTY:       false,
-	}, parameterCodec)
+	pathOptions := clientcmd.NewDefaultPathOptions()
+	pathOptions.GlobalFile = framework.TestContext.KubeConfig
+	pathOptions.EnvVar = ""
 
-	exec, err := remotecommand.NewSPDYExecutor(f.KubeConfig, "POST", req.URL())
+	config, err := pathOptions.GetStartingConfig()
 	if err != nil {
-		return "", "", fmt.Errorf("error while creating Executor: %v", err)
+		return err
 	}
 
-	var stdout, stderr bytes.Buffer
-	err = exec.Stream(remotecommand.StreamOptions{
-		Stdin:  stdin,
-		Stdout: &stdout,
-		Stderr: &stderr,
-		Tty:    false,
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("error in Stream: %v", err)
-	}
-
-	return stdout.String(), stderr.String(), nil
-}
-
-const (
-	Running           = "Running"
-	Pending           = "Pending"
-	Completed         = "Completed"
-	ContainerCreating = "ContainerCreating"
-	PodInitializing   = "PodInitializing"
-	Terminating       = "Terminating"
-	Initing           = "Initing"
-)
-
-func getPodContainerStatus(pod corev1.Pod, reason string) string {
-	for i := len(pod.Status.ContainerStatuses) - 1; i >= 0; i-- {
-		container := pod.Status.ContainerStatuses[i]
-
-		if container.State.Waiting != nil && container.State.Waiting.Reason != "" {
-			reason = container.State.Waiting.Reason
-		} else if container.State.Terminated != nil && container.State.Terminated.Reason != "" {
-			reason = container.State.Terminated.Reason
-		} else if container.State.Terminated != nil && container.State.Terminated.Reason == "" {
-			if container.State.Terminated.Signal != 0 {
-				reason = fmt.Sprintf("Signal:%d", container.State.Terminated.Signal)
-			} else {
-				reason = fmt.Sprintf("ExitCode:%d", container.State.Terminated.ExitCode)
-			}
+	if config.CurrentContext != f.KubeContext {
+		Logf("Switching context to " + f.KubeContext)
+		config.CurrentContext = f.KubeContext
+		if err = clientcmd.ModifyConfig(pathOptions, *config, true); err != nil {
+			return err
 		}
 	}
-	return reason
+
+	return nil
 }
 
-func getPodStatus(pod corev1.Pod) string {
-	reason := string(pod.Status.Phase)
-	if pod.Status.Reason != "" {
-		reason = pod.Status.Reason
-	}
-	initializing, reason := getPodInitStatus(pod, reason)
-	if !initializing {
-		reason = getPodContainerStatus(pod, reason)
-	}
+func NewFrameworkWithContext(baseName, kubeContext string) *Framework {
+	f := &Framework{KubeContext: kubeContext}
+	ginkgo.BeforeEach(f.BeforeEach)
+	f.Framework = framework.NewDefaultFramework(baseName)
+	ginkgo.BeforeEach(f.BeforeEach)
 
-	if pod.DeletionTimestamp != nil && pod.Status.Reason == "NodeLost" {
-		reason = "Unknown"
-	} else if pod.DeletionTimestamp != nil {
-		reason = "Terminating"
-	}
-	return reason
-}
+	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
+	f.NamespacePodSecurityWarnLevel = admissionapi.LevelPrivileged
+	f.DumpAllNamespaceInfo = dumpEvents
+	f.ClusterIPFamily = os.Getenv("E2E_IP_FAMILY")
+	f.ClusterVersion = os.Getenv("E2E_BRANCH")
+	f.ClusterNetworkMode = os.Getenv("E2E_NETWORK_MODE")
 
-func getPodInitStatus(pod corev1.Pod, reason string) (bool, string) {
-	initializing := false
-	for i := range pod.Status.InitContainerStatuses {
-		container := pod.Status.InitContainerStatuses[i]
-		switch {
-		case container.State.Terminated != nil && container.State.Terminated.ExitCode == 0:
-			continue
-		case container.State.Terminated != nil:
-			// initialization is failed
-			if len(container.State.Terminated.Reason) == 0 {
-				if container.State.Terminated.Signal != 0 {
-					reason = fmt.Sprintf("Init:Signal:%d", container.State.Terminated.Signal)
-				} else {
-					reason = fmt.Sprintf("Init:ExitCode:%d", container.State.Terminated.ExitCode)
-				}
-			} else {
-				reason = "Init:" + container.State.Terminated.Reason
-			}
-			initializing = true
-		case container.State.Waiting != nil && len(container.State.Waiting.Reason) > 0 && container.State.Waiting.Reason != "PodInitializing":
-			reason = "Initing:" + container.State.Waiting.Reason
-			initializing = true
-		default:
-			reason = fmt.Sprintf("Initing:%d/%d", i, len(pod.Spec.InitContainers))
-			initializing = true
+	if strings.HasPrefix(f.ClusterVersion, "release-") {
+		n, err := fmt.Sscanf(f.ClusterVersion, "release-%d.%d", &f.ClusterVersionMajor, &f.ClusterVersionMinor)
+		if err != nil || n != 2 {
+			defer ginkgo.GinkgoRecover()
+			ginkgo.Fail(fmt.Sprintf("Failed to parse Kube-OVN version string %q", f.ClusterVersion))
 		}
-		break
+	} else {
+		f.ClusterVersionMajor, f.ClusterVersionMinor = 999, 999
 	}
-	return initializing, reason
+
+	return f
+}
+
+func (f *Framework) IsIPv4() bool {
+	return f.ClusterIPFamily == IPv4
+}
+
+func (f *Framework) IsIPv6() bool {
+	return f.ClusterIPFamily == IPv6
+}
+
+func (f *Framework) IsDual() bool {
+	return f.ClusterIPFamily == Dual
+}
+
+func (f *Framework) HasIPv4() bool {
+	return !f.IsIPv6()
+}
+
+func (f *Framework) HasIPv6() bool {
+	return !f.IsIPv4()
+}
+
+// BeforeEach gets a kube-ovn client
+func (f *Framework) BeforeEach() {
+	ginkgo.By("Setting kubernetes context")
+	ExpectNoError(f.useContext())
+
+	if f.KubeOVNClientSet == nil {
+		ginkgo.By("Creating a Kube-OVN client")
+		config, err := framework.LoadConfig()
+		ExpectNoError(err)
+
+		config.QPS = f.Options.ClientQPS
+		config.Burst = f.Options.ClientBurst
+		f.KubeOVNClientSet, err = kubeovncs.NewForConfig(config)
+		ExpectNoError(err)
+	}
+
+	if f.KubeVirtClientSet == nil {
+		ginkgo.By("Creating a KubeVirt client")
+		config, err := framework.LoadConfig()
+		ExpectNoError(err)
+
+		config.QPS = f.Options.ClientQPS
+		config.Burst = f.Options.ClientBurst
+		f.KubeVirtClientSet, err = kubecli.GetKubevirtClientFromRESTConfig(config)
+		ExpectNoError(err)
+	}
+
+	if f.AttachNetClient == nil {
+		ginkgo.By("Creating a network attachment definition client")
+		config, err := framework.LoadConfig()
+		ExpectNoError(err)
+
+		config.QPS = f.Options.ClientQPS
+		config.Burst = f.Options.ClientBurst
+		f.AttachNetClient, err = nad.NewForConfig(config)
+		ExpectNoError(err)
+	}
+
+	if f.KubeOVNImage == "" && f.ClientSet != nil {
+		framework.Logf("Getting Kube-OVN image")
+		f.KubeOVNImage = GetKubeOvnImage(f.ClientSet)
+		framework.Logf("Got Kube-OVN image: %s", f.KubeOVNImage)
+	}
+
+	framework.TestContext.Host = ""
+}
+
+func (f *Framework) VersionPriorTo(major, minor uint) bool {
+	return f.ClusterVersionMajor < major || (f.ClusterVersionMajor == major && f.ClusterVersionMinor < minor)
+}
+
+func (f *Framework) SkipVersionPriorTo(major, minor uint, reason string) {
+	ginkgo.GinkgoHelper()
+
+	if f.VersionPriorTo(major, minor) {
+		ginkgo.Skip(reason)
+	}
+}
+
+func (f *Framework) ValidateFinalizers(obj metav1.Object) {
+	ginkgo.GinkgoHelper()
+
+	finalizers := obj.GetFinalizers()
+	if !f.VersionPriorTo(1, 13) {
+		ExpectContainElement(finalizers, util.KubeOVNControllerFinalizer)
+		ExpectNotContainElement(finalizers, util.DepreciatedFinalizerName)
+	} else {
+		ExpectContainElement(finalizers, util.DepreciatedFinalizerName)
+	}
+}
+
+func Describe(text string, body func()) bool {
+	return ginkgo.Describe("[CNI:Kube-OVN] "+text, ginkgo.Offset(1), body)
+}
+
+func FDescribe(text string, body func()) bool {
+	return ginkgo.FDescribe("[CNI:Kube-OVN] "+text, ginkgo.Offset(1), body)
+}
+
+func SerialDescribe(text string, body func()) bool {
+	return ginkgo.Describe("[CNI:Kube-OVN] "+text, ginkgo.Offset(1), ginkgo.Serial, body)
+}
+
+func OrderedDescribe(text string, body func()) bool {
+	return ginkgo.Describe("[CNI:Kube-OVN] "+text, ginkgo.Offset(1), ginkgo.Ordered, body)
+}
+
+var ConformanceIt func(args ...interface{}) bool = framework.ConformanceIt
+
+func DisruptiveIt(text string, body interface{}) bool {
+	return framework.It(text, ginkgo.Offset(1), body, framework.WithDisruptive())
 }

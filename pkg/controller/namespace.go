@@ -1,17 +1,15 @@
 package controller
 
 import (
-	"context"
-	"fmt"
-	"reflect"
+	"maps"
+	"slices"
 	"strings"
 
+	"github.com/scylladb/go-set/strset"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
@@ -19,50 +17,57 @@ import (
 )
 
 func (c *Controller) enqueueAddNamespace(obj interface{}) {
-	if !c.isLeader() {
-		return
-	}
 	if c.config.EnableNP {
 		for _, np := range c.namespaceMatchNetworkPolicies(obj.(*v1.Namespace)) {
 			c.updateNpQueue.Add(np)
 		}
 	}
-	var key string
-	var err error
-	if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
-		utilruntime.HandleError(err)
-		return
-	}
+
+	key := cache.MetaObjectToName(obj.(*v1.Namespace)).String()
 	c.addNamespaceQueue.Add(key)
 }
 
 func (c *Controller) enqueueDeleteNamespace(obj interface{}) {
-	if !c.isLeader() {
-		return
-	}
-
 	if c.config.EnableNP {
 		for _, np := range c.namespaceMatchNetworkPolicies(obj.(*v1.Namespace)) {
 			c.updateNpQueue.Add(np)
 		}
 	}
+	if c.config.EnableANP {
+		c.updateAnpsByLabelsMatch(obj.(*v1.Namespace).Labels, nil)
+	}
 }
 
-func (c *Controller) enqueueUpdateNamespace(old, new interface{}) {
-	if !c.isLeader() {
-		return
-	}
-	oldNs := old.(*v1.Namespace)
-	newNs := new.(*v1.Namespace)
+func (c *Controller) enqueueUpdateNamespace(oldObj, newObj interface{}) {
+	oldNs := oldObj.(*v1.Namespace)
+	newNs := newObj.(*v1.Namespace)
 	if oldNs.ResourceVersion == newNs.ResourceVersion {
 		return
 	}
 
-	if c.config.EnableNP && !reflect.DeepEqual(oldNs.Labels, newNs.Labels) {
-		oldNp := c.namespaceMatchNetworkPolicies(oldNs)
-		newNp := c.namespaceMatchNetworkPolicies(newNs)
-		for _, np := range util.DiffStringSlice(oldNp, newNp) {
-			c.updateNpQueue.Add(np)
+	if !maps.Equal(oldNs.Labels, newNs.Labels) {
+		if c.config.EnableNP {
+			oldNp := c.namespaceMatchNetworkPolicies(oldNs)
+			newNp := c.namespaceMatchNetworkPolicies(newNs)
+			for _, np := range util.DiffStringSlice(oldNp, newNp) {
+				c.updateNpQueue.Add(np)
+			}
+		}
+
+		if c.config.EnableANP {
+			c.updateAnpsByLabelsMatch(newObj.(*v1.Namespace).Labels, nil)
+		}
+
+		expectSubnets, err := c.getNsExpectSubnets(newNs)
+		if err != nil {
+			klog.Errorf("failed to list expected subnets for namespace %s, %v", newNs.Name, err)
+			return
+		}
+
+		expectSubnetsSet := strset.New(expectSubnets...)
+		existSubnetsSet := strset.New(strings.Split(newNs.Annotations[util.LogicalSwitchAnnotation], ",")...)
+		if !expectSubnetsSet.IsEqual(existSubnetsSet) {
+			c.addNamespaceQueue.Add(newNs.Name)
 		}
 	}
 
@@ -71,66 +76,36 @@ func (c *Controller) enqueueUpdateNamespace(old, new interface{}) {
 		klog.Warningf("no logical switch annotation for ns %s", newNs.Name)
 		c.addNamespaceQueue.Add(newNs.Name)
 	}
-
-	if newNs.Annotations != nil && newNs.Annotations[util.LogicalSwitchAnnotation] != "" && !reflect.DeepEqual(oldNs.Annotations, newNs.Annotations) {
-		c.addNamespaceQueue.Add(newNs.Name)
-	}
-}
-
-func (c *Controller) runAddNamespaceWorker() {
-	for c.processNextAddNamespaceWorkItem() {
-	}
-}
-
-func (c *Controller) processNextAddNamespaceWorkItem() bool {
-	obj, shutdown := c.addNamespaceQueue.Get()
-
-	if shutdown {
-		return false
-	}
-
-	err := func(obj interface{}) error {
-		defer c.addNamespaceQueue.Done(obj)
-		var key string
-		var ok bool
-		if key, ok = obj.(string); !ok {
-			c.addNamespaceQueue.Forget(obj)
-			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
-			return nil
-		}
-		if err := c.handleAddNamespace(key); err != nil {
-			c.addNamespaceQueue.AddRateLimited(key)
-			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
-		}
-		c.addNamespaceQueue.Forget(obj)
-		return nil
-	}(obj)
-
-	if err != nil {
-		utilruntime.HandleError(err)
-		return true
-	}
-
-	return true
 }
 
 func (c *Controller) handleAddNamespace(key string) error {
-	orinamespace, err := c.namespacesLister.Get(key)
+	c.nsKeyMutex.LockKey(key)
+	defer func() { _ = c.nsKeyMutex.UnlockKey(key) }()
+	klog.Infof("handle add/update namespace %s", key)
+
+	cachedNs, err := c.namespacesLister.Get(key)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil
 		}
+		klog.Error(err)
 		return err
 	}
-	namespace := orinamespace.DeepCopy()
+	namespace := cachedNs.DeepCopy()
 
 	var ls string
-	var lss, cidrs, excludeIps []string
+	var lss, cidrs, excludeIps, ipPoolsAnnotation []string
 	subnets, err := c.subnetsLister.List(labels.Everything())
 	if err != nil {
 		klog.Errorf("failed to list subnets %v", err)
 		return err
 	}
+	ipPoolList, err := c.ippoolLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("failed to list ippools: %v", err)
+		return err
+	}
+
 	// check if subnet bind ns
 	for _, s := range subnets {
 		for _, ns := range s.Spec.Namespaces {
@@ -140,6 +115,45 @@ func (c *Controller) handleAddNamespace(key string) error {
 				excludeIps = append(excludeIps, strings.Join(s.Spec.ExcludeIps, ","))
 				break
 			}
+		}
+
+		// bind subnet with namespaceLabelSeletcor which select the namespace
+		for _, nsSelector := range s.Spec.NamespaceSelectors {
+			matchSelector, err := metav1.LabelSelectorAsSelector(&nsSelector)
+			if err != nil {
+				klog.Errorf("failed to convert label selector, %v", err)
+				return err
+			}
+
+			if matchSelector.Matches(labels.Set(namespace.Labels)) {
+				if slices.Contains(lss, s.Name) {
+					break
+				}
+				lss = append(lss, s.Name)
+				cidrs = append(cidrs, s.Spec.CIDRBlock)
+				excludeIps = append(excludeIps, strings.Join(s.Spec.ExcludeIps, ","))
+				break
+			}
+		}
+
+		// check if subnet is in custom vpc with configured defaultSubnet, then annotate the namespace with this subnet
+		if s.Spec.Vpc != "" && s.Spec.Vpc != c.config.ClusterRouter {
+			vpc, err := c.vpcsLister.Get(s.Spec.Vpc)
+			if err != nil {
+				klog.Errorf("failed to get custom vpc %v", err)
+				return err
+			}
+			if s.Name == vpc.Spec.DefaultSubnet {
+				if slices.Contains(vpc.Spec.Namespaces, key) && key != metav1.NamespaceSystem {
+					lss = append([]string{s.Name}, lss...)
+				}
+			}
+		}
+	}
+
+	for _, ipPool := range ipPoolList {
+		if slices.Contains(ipPool.Spec.Namespaces, key) {
+			ipPoolsAnnotation = append(ipPoolsAnnotation, ipPool.Name)
 		}
 	}
 
@@ -156,7 +170,7 @@ func (c *Controller) handleAddNamespace(key string) error {
 			return err
 		}
 		for _, v := range vpcs {
-			if util.ContainsString(v.Spec.Namespaces, key) {
+			if slices.Contains(v.Spec.Namespaces, key) {
 				vpc = v
 				break
 			}
@@ -177,21 +191,59 @@ func (c *Controller) handleAddNamespace(key string) error {
 		excludeIps = append(excludeIps, strings.Join(subnet.Spec.ExcludeIps, ","))
 	}
 
-	op := "replace"
-	if namespace.Annotations == nil || len(namespace.Annotations) == 0 {
-		op = "add"
-		namespace.Annotations = map[string]string{}
-	} else {
-		if namespace.Annotations[util.LogicalSwitchAnnotation] == strings.Join(lss, ",") {
-			return nil
-		}
+	if namespace.Annotations[util.LogicalSwitchAnnotation] == strings.Join(lss, ",") &&
+		namespace.Annotations[util.CidrAnnotation] == strings.Join(cidrs, ";") &&
+		namespace.Annotations[util.ExcludeIpsAnnotation] == strings.Join(excludeIps, ";") &&
+		namespace.Annotations[util.IPPoolAnnotation] == strings.Join(ipPoolsAnnotation, ",") {
+		return nil
 	}
-	namespace.Annotations[util.LogicalSwitchAnnotation] = strings.Join(lss, ",")
-	namespace.Annotations[util.CidrAnnotation] = strings.Join(cidrs, ";")
-	namespace.Annotations[util.ExcludeIpsAnnotation] = strings.Join(excludeIps, ";")
 
-	if _, err = c.config.KubeClient.CoreV1().Namespaces().Patch(context.Background(), key, types.JSONPatchType, generatePatchPayload(namespace.Annotations, op), metav1.PatchOptions{}, ""); err != nil {
+	patch := util.KVPatch{
+		util.LogicalSwitchAnnotation: strings.Join(lss, ","),
+		util.CidrAnnotation:          strings.Join(cidrs, ";"),
+		util.ExcludeIpsAnnotation:    strings.Join(excludeIps, ";"),
+	}
+
+	if len(ipPoolsAnnotation) == 0 {
+		patch[util.IPPoolAnnotation] = nil
+	} else {
+		patch[util.IPPoolAnnotation] = strings.Join(ipPoolsAnnotation, ",")
+	}
+
+	if err = util.PatchAnnotations(c.config.KubeClient.CoreV1().Namespaces(), key, patch); err != nil {
 		klog.Errorf("patch namespace %s failed %v", key, err)
 	}
 	return err
+}
+
+func (c *Controller) getNsExpectSubnets(newNs *v1.Namespace) ([]string, error) {
+	var expectSubnets []string
+
+	subnets, err := c.subnetsLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("failed to list subnets %v", err)
+		return expectSubnets, err
+	}
+	for _, subnet := range subnets {
+		// ns labels match subnet's selector
+		for _, nsSelector := range subnet.Spec.NamespaceSelectors {
+			matchSelector, err := metav1.LabelSelectorAsSelector(&nsSelector)
+			if err != nil {
+				klog.Errorf("failed to convert label selector, %v", err)
+				return expectSubnets, err
+			}
+
+			if matchSelector.Matches(labels.Set(newNs.Labels)) {
+				expectSubnets = append(expectSubnets, subnet.Name)
+				break
+			}
+		}
+
+		// ns included in subnet's namespaces
+		if slices.Contains(subnet.Spec.Namespaces, newNs.Name) && !slices.Contains(expectSubnets, subnet.Name) {
+			expectSubnets = append(expectSubnets, subnet.Name)
+		}
+	}
+
+	return expectSubnets, nil
 }

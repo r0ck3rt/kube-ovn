@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/kubeovn/ovsdb"
 	"k8s.io/klog/v2"
 )
 
@@ -22,7 +23,7 @@ func (e *Exporter) getOvnStatus() map[string]int {
 	result := make(map[string]int)
 
 	// get ovn-northbound status
-	cmdstr := "ovs-appctl -t /var/run/ovn/ovnnb_db.ctl cluster/status OVN_Northbound"
+	cmdstr := "ovn-appctl -t /var/run/ovn/ovnnb_db.ctl cluster/status OVN_Northbound"
 	cmd := exec.Command("sh", "-c", cmdstr)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -32,7 +33,7 @@ func (e *Exporter) getOvnStatus() map[string]int {
 	result["ovsdb-server-northbound"] = parseDbStatus(string(output))
 
 	// get ovn-southbound status
-	cmdstr = "ovs-appctl -t /var/run/ovn/ovnsb_db.ctl cluster/status OVN_Southbound"
+	cmdstr = "ovn-appctl -t /var/run/ovn/ovnsb_db.ctl cluster/status OVN_Southbound"
 	cmd = exec.Command("sh", "-c", cmdstr)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
@@ -42,14 +43,14 @@ func (e *Exporter) getOvnStatus() map[string]int {
 	result["ovsdb-server-southbound"] = parseDbStatus(string(output))
 
 	// get ovn-northd status
-	pid, err := os.ReadFile("/var/run/ovn/ovn-northd.pid")
+	pid, err := os.ReadFile(e.Client.Service.Northd.File.Pid.Path)
 	if err != nil {
 		klog.Errorf("read ovn-northd pid failed, err %v", err)
 		result["ovn-northd"] = 0
 	} else {
-		cmdstr := "ovs-appctl -t /var/run/ovn/ovn-northd." + strings.Trim(string(pid), "\n") + ".ctl status"
+		cmdstr := fmt.Sprintf("ovn-appctl -t /var/run/ovn/ovn-northd.%s.ctl status", strings.Trim(string(pid), "\n"))
 		klog.V(3).Infof("cmd is %v", cmdstr)
-		cmd := exec.Command("sh", "-c", cmdstr)
+		cmd := exec.Command("sh", "-c", cmdstr) // #nosec G204
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			klog.Errorf("get ovn-northd status failed, err %v", err)
@@ -70,11 +71,42 @@ func (e *Exporter) getOvnStatus() map[string]int {
 	return result
 }
 
+func (e *Exporter) getOvnStatusContent() map[string]string {
+	result := map[string]string{"ovsdb-server-northbound": "", "ovsdb-server-southbound": ""}
+
+	// get ovn-northbound status
+	cmdstr := "ovn-appctl -t /var/run/ovn/ovnnb_db.ctl cluster/status OVN_Northbound"
+	cmd := exec.Command("sh", "-c", cmdstr)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		klog.Errorf("get ovn-northbound status failed, err %v", err)
+	}
+	if strings.Contains(string(output), "Servers:") {
+		servers := strings.Split(string(output), "Servers:")[1]
+		result["ovsdb-server-northbound"] = servers
+	}
+
+	// get ovn-southbound status
+	cmdstr = "ovn-appctl -t /var/run/ovn/ovnsb_db.ctl cluster/status OVN_Southbound"
+	cmd = exec.Command("sh", "-c", cmdstr)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		klog.Errorf("get ovn-southbound status failed, err %v", err)
+	}
+	if strings.Contains(string(output), "Servers:") {
+		servers := strings.Split(string(output), "Servers:")[1]
+		result["ovsdb-server-southbound"] = servers
+	}
+
+	return result
+}
+
 func getClusterEnableState(dbName string) (bool, error) {
 	cmdstr := fmt.Sprintf("ovsdb-tool db-is-clustered %s", dbName)
-	cmd := exec.Command("sh", "-c", cmdstr)
+	cmd := exec.Command("sh", "-c", cmdstr) // #nosec G204
 	_, err := cmd.CombinedOutput()
 	if err != nil {
+		klog.Error(err)
 		return false, err
 	}
 	return true, nil
@@ -104,6 +136,31 @@ func (e *Exporter) setLogicalSwitchInfoMetric() {
 	}
 }
 
+func lspAddress(addresses []ovsdb.OvnLogicalSwitchPortAddress) (mac, ip string) {
+	if len(addresses) == 0 {
+		return "", ""
+	}
+	if addresses[0].Router {
+		return "router", "router"
+	}
+	if addresses[0].Unknown {
+		return "unknown", "unknown"
+	}
+	if addresses[0].Dynamic {
+		return "dynamic", "dynamic"
+	}
+
+	if addresses[0].MacAddress != nil {
+		mac = addresses[0].MacAddress.String()
+	}
+	ips := make([]string, 0, len(addresses[0].IpAddresses))
+	for _, address := range addresses[0].IpAddresses {
+		ips = append(ips, address.String())
+	}
+	ip = strings.Join(ips, " ")
+	return
+}
+
 func (e *Exporter) setLogicalSwitchPortInfoMetric() {
 	lswps, err := e.Client.GetLogicalSwitchPorts()
 	if err != nil {
@@ -111,8 +168,9 @@ func (e *Exporter) setLogicalSwitchPortInfoMetric() {
 		e.IncrementErrorCounter()
 	} else {
 		for _, port := range lswps {
+			mac, ip := lspAddress(port.Addresses)
 			metricLogicalSwitchPortInfo.WithLabelValues(e.Client.System.Hostname, port.UUID, port.Name, port.ChassisUUID,
-				port.LogicalSwitchName, port.DatapathUUID, port.PortBindingUUID, port.MacAddress.String(), port.IPAddress.String()).Set(1)
+				port.LogicalSwitchName, port.DatapathUUID, port.PortBindingUUID, mac, ip).Set(1)
 			metricLogicalSwitchPortTunnelKey.WithLabelValues(e.Client.System.Hostname, port.UUID, port.LogicalSwitchName, port.Name).Set(float64(port.TunnelKey))
 		}
 	}
@@ -122,11 +180,11 @@ func getClusterInfo(direction, dbName string) (*OVNDBClusterStatus, error) {
 	clusterStatus := &OVNDBClusterStatus{}
 	var err error
 
-	cmdstr := fmt.Sprintf("ovs-appctl -t /var/run/ovn/ovn%s_db.ctl cluster/status %s", direction, dbName)
-	cmd := exec.Command("sh", "-c", cmdstr)
+	cmdstr := fmt.Sprintf("ovn-appctl -t /var/run/ovn/ovn%s_db.ctl cluster/status %s", direction, dbName)
+	cmd := exec.Command("sh", "-c", cmdstr) // #nosec G204
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve cluster/status info for database %s: %v", dbName, err)
+		return nil, fmt.Errorf("failed to retrieve cluster/status info for database %s: %w", dbName, err)
 	}
 
 	for _, line := range strings.Split(string(output), "\n") {
@@ -179,13 +237,14 @@ func getClusterInfo(direction, dbName string) (*OVNDBClusterStatus, error) {
 				// the value is of the format `->0000 (->56d7) <-46ac <-56d7`
 				var connIn, connOut, connInErr, connOutErr float64
 				for _, conn := range strings.Fields(line[idx+2:]) {
-					if strings.HasPrefix(conn, "->") {
+					switch {
+					case strings.HasPrefix(conn, "->"):
 						connOut++
-					} else if strings.HasPrefix(conn, "<-") {
+					case strings.HasPrefix(conn, "<-"):
 						connIn++
-					} else if strings.HasPrefix(conn, "(->") {
+					case strings.HasPrefix(conn, "(->"):
 						connOutErr++
-					} else if strings.HasPrefix(conn, "(<-") {
+					case strings.HasPrefix(conn, "(<-"):
 						connInErr++
 					}
 				}
@@ -260,7 +319,7 @@ func getDBStatus(dbName string) (bool, error) {
 		cmdstr = fmt.Sprintf("ovn-appctl -t /var/run/ovn/ovnsb_db.ctl ovsdb-server/get-db-storage-status %s", dbName)
 	}
 
-	cmd := exec.Command("sh", "-c", cmdstr)
+	cmd := exec.Command("sh", "-c", cmdstr) // #nosec G204
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		klog.Errorf("get ovn-northbound status failed, err %v", err)
@@ -279,4 +338,36 @@ func getDBStatus(dbName string) (bool, error) {
 	}
 
 	return result, nil
+}
+
+func resetLogicalSwitchMetrics() {
+	metricLogicalSwitchInfo.Reset()
+	metricLogicalSwitchPortsNum.Reset()
+	metricLogicalSwitchPortBinding.Reset()
+	metricLogicalSwitchExternalIDs.Reset()
+	metricLogicalSwitchTunnelKey.Reset()
+}
+
+func resetLogicalSwitchPortMetrics() {
+	metricLogicalSwitchPortInfo.Reset()
+	metricLogicalSwitchPortTunnelKey.Reset()
+}
+
+func resetOvnClusterMetrics() {
+	metricClusterRole.Reset()
+	metricClusterStatus.Reset()
+	metricClusterTerm.Reset()
+	metricClusterLeaderSelf.Reset()
+	metricClusterVoteSelf.Reset()
+
+	metricClusterElectionTimer.Reset()
+	metricClusterNotCommittedEntryCount.Reset()
+	metricClusterNotAppliedEntryCount.Reset()
+	metricClusterLogIndexStart.Reset()
+	metricClusterLogIndexNext.Reset()
+
+	metricClusterInConnTotal.Reset()
+	metricClusterOutConnTotal.Reset()
+	metricClusterInConnErrTotal.Reset()
+	metricClusterOutConnErrTotal.Reset()
 }

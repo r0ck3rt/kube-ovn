@@ -1,58 +1,83 @@
-package daemon
+package main
 
 import (
-	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
-	_ "net/http/pprof" // #nosec
+	"net/http/pprof"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/klog/v2"
-	"k8s.io/sample-controller/pkg/signals"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	kubeovninformer "github.com/kubeovn/kube-ovn/pkg/client/informers/externalversions"
 	"github.com/kubeovn/kube-ovn/pkg/daemon"
+	"github.com/kubeovn/kube-ovn/pkg/metrics"
+	"github.com/kubeovn/kube-ovn/pkg/ovs"
 	"github.com/kubeovn/kube-ovn/pkg/util"
 	"github.com/kubeovn/kube-ovn/versions"
 )
 
-func CmdMain() {
+func main() {
 	defer klog.Flush()
 
-	klog.Infof(versions.String())
-	daemon.InitMetrics()
-	util.InitKlogMetrics()
+	config := daemon.ParseFlags()
+	klog.Info(versions.String())
+
+	if config.InstallCNIConfig {
+		if err := mvCNIConf(config.CniConfDir, config.CniConfFile, config.CniConfName); err != nil {
+			util.LogFatalAndExit(err, "failed to mv cni config file")
+		}
+		return
+	}
+
+	printCaps()
+
+	ovs.UpdateOVSVsctlLimiter(config.OVSVsctlConcurrency)
 
 	nicBridgeMappings, err := daemon.InitOVSBridges()
 	if err != nil {
-		klog.Fatalf("failed to initialize OVS bridges: %v", err)
+		util.LogFatalAndExit(err, "failed to initialize OVS bridges")
 	}
 
-	config, err := daemon.ParseFlags(nicBridgeMappings)
-	if err != nil {
-		klog.Fatalf("parse config failed %v", err)
+	if err = config.Init(nicBridgeMappings); err != nil {
+		util.LogFatalAndExit(err, "failed to initialize config")
 	}
 
-	if err := Retry(util.ChasRetryTime, util.ChasRetryIntev, initChassisAnno, config); err != nil {
-		klog.Fatalf("failed to annotate chassis id, %v", err)
+	if err := Retry(util.ChassisRetryMaxTimes, util.ChassisCniDaemonRetryInterval, initChassisAnno, config); err != nil {
+		util.LogFatalAndExit(err, "failed to initialize ovn chassis annotation")
 	}
 
-	if err = daemon.InitMirror(config); err != nil {
-		klog.Fatalf("failed to init mirror nic, %v", err)
+	if err := Retry(util.MirrosRetryMaxTimes, util.MirrosRetryInterval, daemon.InitMirror, config); err != nil {
+		util.LogFatalAndExit(err, "failed to initialize ovs mirror")
 	}
 
+	klog.Info("init node gw")
 	if err = daemon.InitNodeGateway(config); err != nil {
-		klog.Fatalf("init node gateway failed %v", err)
+		util.LogFatalAndExit(err, "failed to initialize node gateway")
 	}
 
-	stopCh := signals.SetupSignalHandler()
+	if err := initForOS(); err != nil {
+		util.LogFatalAndExit(err, "failed to do the OS initialization")
+	}
+
+	if config.SetVxlanTxOff && config.NetworkType == util.NetworkTypeVxlan {
+		if err := setVxlanNicTxOff(); err != nil {
+			util.LogFatalAndExit(err, "failed to do the OS initialization for vxlan case")
+		}
+	}
+
+	ctrl.SetLogger(klog.NewKlogr())
+	ctx := signals.SetupSignalHandler()
+	stopCh := ctx.Done()
 	podInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(config.KubeClient, 0,
 		kubeinformers.WithTweakListOptions(func(listOption *v1.ListOptions) {
 			listOption.FieldSelector = fmt.Sprintf("spec.nodeName=%s", config.NodeName)
@@ -66,33 +91,107 @@ func CmdMain() {
 		kubeovninformer.WithTweakListOptions(func(listOption *v1.ListOptions) {
 			listOption.AllowWatchBookmarks = true
 		}))
-	ctl, err := daemon.NewController(config, podInformerFactory, nodeInformerFactory, kubeovnInformerFactory)
+	ctl, err := daemon.NewController(config, stopCh, podInformerFactory, nodeInformerFactory, kubeovnInformerFactory)
 	if err != nil {
-		klog.Fatalf("create controller failed %v", err)
+		util.LogFatalAndExit(err, "failed to create controller")
 	}
-	podInformerFactory.Start(stopCh)
-	nodeInformerFactory.Start(stopCh)
-	kubeovnInformerFactory.Start(stopCh)
+	klog.Info("start daemon controller")
 	go ctl.Run(stopCh)
 	go daemon.RunServer(config, ctl)
-	if err := mvCNIConf(config.CniConfName); err != nil {
-		klog.Fatalf("failed to mv cni conf, %v", err)
+
+	addr := util.GetDefaultListenAddr()
+	if config.EnableVerboseConnCheck {
+		go func() {
+			connListenaddr := util.JoinHostPort(addr, config.TCPConnCheckPort)
+			if err := util.TCPConnectivityListen(connListenaddr); err != nil {
+				util.LogFatalAndExit(err, "failed to start TCP listen on addr %s", addr)
+			}
+		}()
+
+		go func() {
+			connListenaddr := util.JoinHostPort(addr, config.UDPConnCheckPort)
+			if err := util.UDPConnectivityListen(connListenaddr); err != nil {
+				util.LogFatalAndExit(err, "failed to start UDP listen on addr %s", addr)
+			}
+		}()
 	}
-	http.Handle("/metrics", promhttp.Handler())
-	klog.Fatal(http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", config.PprofPort), nil))
+
+	servePprofInMetricsServer := config.EnableMetrics && addr == "0.0.0.0"
+	if config.EnablePprof && !servePprofInMetricsServer {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+		listerner, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(config.PprofPort)})
+		if err != nil {
+			util.LogFatalAndExit(err, "failed to listen on %s", util.JoinHostPort("127.0.0.1", config.PprofPort))
+		}
+		svr := manager.Server{
+			Name: "pprof",
+			Server: &http.Server{
+				Handler:           mux,
+				MaxHeaderBytes:    1 << 20,
+				IdleTimeout:       90 * time.Second,
+				ReadHeaderTimeout: 32 * time.Second,
+			},
+			Listener: listerner,
+		}
+		go func() {
+			if err = svr.Start(ctx); err != nil {
+				util.LogFatalAndExit(err, "failed to run pprof server")
+			}
+		}()
+	}
+
+	if config.EnableMetrics {
+		daemon.InitMetrics()
+		metrics.InitKlogMetrics()
+		listenAddr := util.JoinHostPort(addr, config.PprofPort)
+		if err = metrics.Run(ctx, nil, listenAddr, config.SecureServing, servePprofInMetricsServer); err != nil {
+			util.LogFatalAndExit(err, "failed to run metrics server")
+		}
+	} else {
+		klog.Info("metrics server is disabled")
+		listerner, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(addr), Port: int(config.PprofPort)})
+		if err != nil {
+			util.LogFatalAndExit(err, "failed to listen on %s", util.JoinHostPort(addr, config.PprofPort))
+		}
+		svr := manager.Server{
+			Name: "health-check",
+			Server: &http.Server{
+				Handler:           http.NewServeMux(),
+				MaxHeaderBytes:    1 << 20,
+				IdleTimeout:       90 * time.Second,
+				ReadHeaderTimeout: 32 * time.Second,
+			},
+			Listener: listerner,
+		}
+		go func() {
+			if err = svr.Start(ctx); err != nil {
+				util.LogFatalAndExit(err, "failed to run health check server")
+			}
+		}()
+	}
+
+	<-stopCh
 }
 
-func mvCNIConf(confName string) error {
-	data, err := os.ReadFile("/kube-ovn/01-kube-ovn.conflist")
+func mvCNIConf(configDir, configFile, confName string) error {
+	data, err := os.ReadFile(configFile) // #nosec G304
 	if err != nil {
+		klog.Errorf("failed to read cni config file %s, %v", configFile, err)
 		return err
 	}
 
-	cniConfPath := fmt.Sprintf("/etc/cni/net.d/%s", confName)
-	return os.WriteFile(cniConfPath, data, 0444)
+	cniConfPath := filepath.Join(configDir, confName)
+	klog.Infof("Installing cni config file %q to %q", configFile, cniConfPath)
+	return os.WriteFile(cniConfPath, data, 0o644) // #nosec G306
 }
 
-func Retry(attempts int, sleep int, f func(configuration *daemon.Configuration) error, ctrl *daemon.Configuration) (err error) {
+func Retry(attempts, sleep int, f func(configuration *daemon.Configuration) error, ctrl *daemon.Configuration) (err error) {
 	for i := 0; ; i++ {
 		err = f(ctrl)
 		if err == nil {
@@ -113,29 +212,18 @@ func initChassisAnno(cfg *daemon.Configuration) error {
 		return err
 	}
 
-	hostname := cfg.NodeName
-	node, err := cfg.KubeClient.CoreV1().Nodes().Get(context.Background(), hostname, v1.GetOptions{})
-	if err != nil {
-		klog.Errorf("failed to get node %s %v", hostname, err)
+	chassesName := strings.TrimSpace(string(chassisID))
+	if chassesName == "" {
+		// not ready yet
+		err = errors.New("chassis id is empty")
+		klog.Error(err)
+		return err
+	}
+	patch := util.KVPatch{util.ChassisAnnotation: chassesName}
+	if err = util.PatchAnnotations(cfg.KubeClient.CoreV1().Nodes(), cfg.NodeName, patch); err != nil {
+		klog.Errorf("failed to patch chassis annotation of node %s: %v", cfg.NodeName, err)
 		return err
 	}
 
-	chassistr := string(chassisID)
-	node.Annotations[util.ChassisAnnotation] = strings.TrimSpace(chassistr)
-	patchPayloadTemplate :=
-		`[{
-        "op": "%s",
-        "path": "/metadata/annotations",
-        "value": %s
-    }]`
-	op := "add"
-	raw, _ := json.Marshal(node.Annotations)
-	patchPayload := fmt.Sprintf(patchPayloadTemplate, op, raw)
-	_, err = cfg.KubeClient.CoreV1().Nodes().Patch(context.Background(), hostname, types.JSONPatchType, []byte(patchPayload), v1.PatchOptions{}, "")
-	if err != nil {
-		klog.Errorf("patch node %s failed %v", hostname, err)
-		return err
-	}
-	klog.Infof("finish adding chassis annotation")
 	return nil
 }

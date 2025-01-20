@@ -19,10 +19,10 @@ limitations under the License.
 package v1
 
 import (
-	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
 )
 
 // IPLister helps list IPs.
@@ -30,39 +30,19 @@ import (
 type IPLister interface {
 	// List lists all IPs in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1.IP, err error)
+	List(selector labels.Selector) (ret []*kubeovnv1.IP, err error)
 	// Get retrieves the IP from the index for a given name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1.IP, error)
+	Get(name string) (*kubeovnv1.IP, error)
 	IPListerExpansion
 }
 
 // iPLister implements the IPLister interface.
 type iPLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*kubeovnv1.IP]
 }
 
 // NewIPLister returns a new IPLister.
 func NewIPLister(indexer cache.Indexer) IPLister {
-	return &iPLister{indexer: indexer}
-}
-
-// List lists all IPs in the indexer.
-func (s *iPLister) List(selector labels.Selector) (ret []*v1.IP, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1.IP))
-	})
-	return ret, err
-}
-
-// Get retrieves the IP from the index for a given name.
-func (s *iPLister) Get(name string) (*v1.IP, error) {
-	obj, exists, err := s.indexer.GetByKey(name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1.Resource("ip"), name)
-	}
-	return obj.(*v1.IP), nil
+	return &iPLister{listers.New[*kubeovnv1.IP](indexer, kubeovnv1.Resource("ip"))}
 }

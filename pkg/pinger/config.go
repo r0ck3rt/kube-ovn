@@ -19,7 +19,7 @@ import (
 type Configuration struct {
 	KubeConfigFile     string
 	KubeClient         kubernetes.Interface
-	Port               int
+	Port               int32
 	DaemonSetNamespace string
 	DaemonSetName      string
 	Interval           int
@@ -34,6 +34,7 @@ type Configuration struct {
 	PodProtocols       []string
 	ExternalAddress    string
 	NetworkMode        string
+	EnableMetrics      bool
 
 	// Used for OVS Monitor
 	PollTimeout                     int
@@ -49,21 +50,32 @@ type Configuration struct {
 	ServiceVswitchdFilePidPath      string
 	ServiceOvnControllerFileLogPath string
 	ServiceOvnControllerFilePidPath string
+	EnableVerboseConnCheck          bool
+	TCPConnCheckPort                int32
+	UDPConnCheckPort                int32
+	TargetIPPorts                   string
 }
 
 func ParseFlags() (*Configuration, error) {
 	var (
-		argPort               = pflag.Int("port", 8080, "metrics port")
+		argPort = pflag.Int32("port", 8080, "metrics port")
+
+		argEnableVerboseConnCheck   = pflag.Bool("enable-verbose-conn-check", false, "enable TCP/UDP connectivity check")
+		argTCPConnectivityCheckPort = pflag.Int32("tcp-conn-check-port", 8100, "TCP connectivity Check Port")
+		argUDPConnectivityCheckPort = pflag.Int32("udp-conn-check-port", 8101, "UDP connectivity Check Port")
+
 		argKubeConfigFile     = pflag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information. If not set use the inCluster token.")
 		argDaemonSetNameSpace = pflag.String("ds-namespace", "kube-system", "kube-ovn-pinger daemonset namespace")
 		argDaemonSetName      = pflag.String("ds-name", "kube-ovn-pinger", "kube-ovn-pinger daemonset name")
 		argInterval           = pflag.Int("interval", 5, "interval seconds between consecutive pings")
 		argMode               = pflag.String("mode", "server", "server or job Mode")
 		argExitCode           = pflag.Int("exit-code", 0, "exit code when failure happens")
-		argInternalDns        = pflag.String("internal-dns", "kubernetes.default", "check dns from pod")
-		argExternalDns        = pflag.String("external-dns", "", "check external dns resolve from pod")
-		argExternalAddress    = pflag.String("external-address", "", "check ping connection to an external address, default: 114.114.114.114")
+		argInternalDNS        = pflag.String("internal-dns", "kubernetes.default", "check dns from pod")
+		argExternalDNS        = pflag.String("external-dns", "", "check external dns resolve from pod")
+		argExternalAddress    = pflag.String("external-address", "", "check ping connection to an external address, default: 1.1.1.1")
+		argTargetIPPorts      = pflag.String("target-ip-ports", "", "target protocol ip and port, eg: 'tcp-169.254.1.1-8080,udp-169.254.2.2-8081'")
 		argNetworkMode        = pflag.String("network-mode", "kube-ovn", "The cni plugin current cluster used, default: kube-ovn")
+		argEnableMetrics      = pflag.Bool("enable-metrics", true, "Whether to support metrics query")
 
 		argPollTimeout                     = pflag.Int("ovs.timeout", 2, "Timeout on JSON-RPC requests to OVS.")
 		argPollInterval                    = pflag.Int("ovs.poll-interval", 15, "The minimum interval (in seconds) between collections from OVS server.")
@@ -89,7 +101,7 @@ func ParseFlags() (*Configuration, error) {
 		if f2 != nil {
 			value := f1.Value.String()
 			if err := f2.Value.Set(value); err != nil {
-				klog.Fatalf("failed to set flag %v", err)
+				util.LogFatalAndExit(err, "failed to set flag")
 			}
 		}
 	})
@@ -107,14 +119,20 @@ func ParseFlags() (*Configuration, error) {
 		Interval:           *argInterval,
 		Mode:               *argMode,
 		ExitCode:           *argExitCode,
-		InternalDNS:        *argInternalDns,
-		ExternalDNS:        *argExternalDns,
+		InternalDNS:        *argInternalDNS,
+		ExternalDNS:        *argExternalDNS,
 		PodIP:              os.Getenv("POD_IP"),
 		HostIP:             os.Getenv("HOST_IP"),
 		NodeName:           os.Getenv("NODE_NAME"),
 		PodName:            os.Getenv("POD_NAME"),
 		ExternalAddress:    *argExternalAddress,
 		NetworkMode:        *argNetworkMode,
+		EnableMetrics:      *argEnableMetrics,
+
+		EnableVerboseConnCheck: *argEnableVerboseConnCheck,
+		TCPConnCheckPort:       *argTCPConnectivityCheckPort,
+		UDPConnCheckPort:       *argUDPConnectivityCheckPort,
+		TargetIPPorts:          *argTargetIPPorts,
 
 		// OVS Monitor
 		PollTimeout:                     *argPollTimeout,
@@ -137,9 +155,9 @@ func ParseFlags() (*Configuration, error) {
 
 	podName := os.Getenv("POD_NAME")
 	for i := 0; i < 3; i++ {
-		pod, err := config.KubeClient.CoreV1().Pods("kube-system").Get(context.Background(), podName, metav1.GetOptions{})
+		pod, err := config.KubeClient.CoreV1().Pods(config.DaemonSetNamespace).Get(context.Background(), podName, metav1.GetOptions{})
 		if err != nil {
-			klog.Errorf("failed to get self pod kube-system/%s: %v", podName, err)
+			klog.Errorf("failed to get self pod %s/%s: %v", config.DaemonSetNamespace, podName, err)
 			return nil, err
 		}
 
@@ -151,8 +169,8 @@ func ParseFlags() (*Configuration, error) {
 			break
 		}
 
-		if pod.Status.ContainerStatuses[0].Ready {
-			klog.Fatalf("failed to get IPs of Pod kube-system/%s", podName)
+		if len(pod.Status.ContainerStatuses) != 0 && pod.Status.ContainerStatuses[0].Ready {
+			util.LogFatalAndExit(nil, "failed to get IPs of Pod %s/%s: podIPs is empty while the container is ready", config.DaemonSetNamespace, podName)
 		}
 
 		klog.Infof("cannot get Pod IPs now, waiting Pod to be ready")
@@ -160,7 +178,7 @@ func ParseFlags() (*Configuration, error) {
 	}
 
 	if len(config.PodProtocols) == 0 {
-		klog.Fatalf("failed to get IPs of Pod kube-system/%s after 3 attempts", podName)
+		util.LogFatalAndExit(nil, "failed to get IPs of Pod %s/%s after 3 attempts", config.DaemonSetNamespace, podName)
 	}
 
 	klog.Infof("pinger config is %+v", config)

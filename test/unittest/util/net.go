@@ -3,14 +3,14 @@ package util
 import (
 	"net"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/gomega"
 
 	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
-var _ = Describe("[Net]", func() {
-	It("AddressCount", func() {
+var _ = ginkgo.Describe("[Net]", func() {
+	ginkgo.It("AddressCount", func() {
 		args := []*net.IPNet{
 			{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(32, 32)},
 			{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(31, 32)},
@@ -18,20 +18,20 @@ var _ = Describe("[Net]", func() {
 			{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(24, 32)},
 		}
 		wants := []float64{
-			0,
-			0,
+			1,
+			2,
 			2,
 			254,
 		}
-		Expect(len(args)).To(Equal(len(args)))
+		gomega.Expect(args).To(gomega.HaveLen(len(wants)))
 
 		for i := range args {
-			Expect(args[i].IP).NotTo(BeNil())
-			Expect(util.AddressCount(args[i])).To(Equal(wants[i]))
+			gomega.Expect(args[i].IP).NotTo(gomega.BeNil())
+			gomega.Expect(util.AddressCount(args[i])).To(gomega.Equal(wants[i]))
 		}
 	})
 
-	It("CountIpNums", func() {
+	ginkgo.It("CountIPNums", func() {
 		args := [][]string{
 			{"10.0.0.101"},
 			{"10.0.0.101..10.0.0.105"},
@@ -42,14 +42,14 @@ var _ = Describe("[Net]", func() {
 			5,
 			15,
 		}
-		Expect(len(args)).To(Equal(len(args)))
+		gomega.Expect(args).To(gomega.HaveLen(len(wants)))
 
 		for i := range args {
-			Expect(util.CountIpNums(args[i])).To(Equal(wants[i]))
+			gomega.Expect(util.CountIPNums(args[i])).To(gomega.Equal(wants[i]))
 		}
 	})
 
-	It("ExpandExcludeIPs", func() {
+	ginkgo.It("ExpandExcludeIPs", func() {
 		type arg struct {
 			cidr       string
 			excludeIps []string
@@ -112,7 +112,7 @@ var _ = Describe("[Net]", func() {
 			{"10.0.1.1", "10.0.1.101..10.0.1.105"},
 			{"10.0.1.1", "10.0.1.101..10.0.1.105", "10.0.1.111..10.0.1.120"},
 			{"10.0.1.1"},
-			{},
+			{"10.0.1.1"},
 			{},
 
 			{},
@@ -130,17 +130,17 @@ var _ = Describe("[Net]", func() {
 			{"fe00::101", "fe00::1a1..fe00::1a5"},
 			{"fe00::101", "fe00::1a1..fe00::1a5", "fe00::1b1..fe00::1c0"},
 			{"fe00::101"},
-			{},
+			{"fe00::101"},
 			{},
 
 			{"10.0.1.1", "10.0.1.101..10.0.1.105"},
 			{"fe00::101", "fe00::1a1..fe00::1a5"},
 			{"10.0.1.1", "10.0.1.101..10.0.1.105", "fe00::101", "fe00::1a1..fe00::1a5"},
 		}
-		Expect(len(args)).To(Equal(len(args)))
+		gomega.Expect(args).To(gomega.HaveLen(len(wants)))
 
 		for i := range args {
-			Expect(util.ExpandExcludeIPs(args[i].excludeIps, args[i].cidr)).To(Equal(wants[i]))
+			gomega.Expect(util.ExpandExcludeIPs(args[i].excludeIps, args[i].cidr)).To(gomega.Equal(wants[i]))
 		}
 	})
 })

@@ -6,8 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/greenpau/ovsdb"
+	"github.com/kubeovn/ovsdb"
 	"k8s.io/klog/v2"
+
+	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
 const metricNamespace = "kube_ovn"
@@ -112,8 +114,7 @@ func (e *Exporter) StartConnection() error {
 func (e *Exporter) TryClientConnection() {
 	for {
 		if tryConnectCnt > 5 {
-			klog.Fatalf("%s: ovn-monitor failed to reconnect db socket finally", e.Client.System.Hostname)
-			break
+			util.LogFatalAndExit(nil, "%s: ovn-monitor failed to reconnect db socket finally", e.Client.System.Hostname)
 		}
 
 		if err := e.StartConnection(); err != nil {
@@ -168,13 +169,21 @@ func GetExporterName() string {
 }
 
 func (e *Exporter) exportOvnStatusGauge() {
+	metricOvnHealthyStatus.Reset()
 	result := e.getOvnStatus()
 	for k, v := range result {
 		metricOvnHealthyStatus.WithLabelValues(e.Client.System.Hostname, k).Set(float64(v))
 	}
+
+	metricOvnHealthyStatusContent.Reset()
+	statusResult := e.getOvnStatusContent()
+	for k, v := range statusResult {
+		metricOvnHealthyStatusContent.WithLabelValues(e.Client.System.Hostname, k, v).Set(float64(1))
+	}
 }
 
 func (e *Exporter) exportOvnLogFileSizeGauge() {
+	metricLogFileSize.Reset()
 	components := []string{
 		"ovsdb-server-southbound",
 		"ovsdb-server-northbound",
@@ -192,6 +201,7 @@ func (e *Exporter) exportOvnLogFileSizeGauge() {
 }
 
 func (e *Exporter) exportOvnDBFileSizeGauge() {
+	metricDBFileSize.Reset()
 	nbPath := e.Client.Database.Northbound.File.Data.Path
 	sbPath := e.Client.Database.Southbound.File.Data.Path
 	dirDbMap := map[string]string{
@@ -213,25 +223,29 @@ func (e *Exporter) exportOvnRequestErrorGauge() {
 }
 
 func (e *Exporter) exportOvnChassisGauge() {
+	metricChassisInfo.Reset()
 	if vteps, err := e.Client.GetChassis(); err != nil {
 		klog.Errorf("%s: %v", e.Client.Database.Southbound.Name, err)
 		e.IncrementErrorCounter()
 	} else {
 		for _, vtep := range vteps {
-			metricChassisInfo.WithLabelValues(e.Client.System.Hostname, vtep.UUID, vtep.Name, vtep.IPAddress.String()).Set(1)
+			metricChassisInfo.WithLabelValues(vtep.Hostname, vtep.UUID, vtep.Name, vtep.IPAddress.String()).Set(1)
 		}
 	}
 }
 
 func (e *Exporter) exportLogicalSwitchGauge() {
+	resetLogicalSwitchMetrics()
 	e.setLogicalSwitchInfoMetric()
 }
 
 func (e *Exporter) exportLogicalSwitchPortGauge() {
+	resetLogicalSwitchPortMetrics()
 	e.setLogicalSwitchPortInfoMetric()
 }
 
 func (e *Exporter) exportOvnClusterEnableGauge() {
+	metricClusterEnabled.Reset()
 	isClusterEnabled, err := getClusterEnableState(e.Client.Database.Northbound.File.Data.Path)
 	if err != nil {
 		klog.Errorf("failed to get output of cluster status: %v", err)
@@ -244,6 +258,7 @@ func (e *Exporter) exportOvnClusterEnableGauge() {
 }
 
 func (e *Exporter) exportOvnClusterInfoGauge() {
+	resetOvnClusterMetrics()
 	dirDbMap := map[string]string{
 		"nb": "OVN_Northbound",
 		"sb": "OVN_Southbound",
@@ -259,6 +274,7 @@ func (e *Exporter) exportOvnClusterInfoGauge() {
 }
 
 func (e *Exporter) exportOvnDBStatusGauge() {
+	metricDBStatus.Reset()
 	dbList := []string{"OVN_Northbound", "OVN_Southbound"}
 	for _, database := range dbList {
 		ok, err := getDBStatus(database)
@@ -277,19 +293,17 @@ func (e *Exporter) exportOvnDBStatusGauge() {
 				if checkNbDbCnt < 6 {
 					klog.Warningf("Failed to get OVN NB DB status for %v times", checkNbDbCnt)
 					return
-				} else {
-					klog.Warningf("Failed to get OVN NB DB status for %v times, ready to restore OVN DB", checkNbDbCnt)
-					checkNbDbCnt = 0
 				}
+				klog.Warningf("Failed to get OVN NB DB status for %v times, ready to restore OVN DB", checkNbDbCnt)
+				checkNbDbCnt = 0
 			case "OVN_Southbound":
 				checkSbDbCnt++
 				if checkSbDbCnt < 6 {
 					klog.Warningf("Failed to get OVN SB DB status for %v times", checkSbDbCnt)
 					return
-				} else {
-					klog.Warningf("Failed to get OVN SB DB status for %v times, ready to restore OVN DB", checkSbDbCnt)
-					checkSbDbCnt = 0
 				}
+				klog.Warningf("Failed to get OVN SB DB status for %v times, ready to restore OVN DB", checkSbDbCnt)
+				checkSbDbCnt = 0
 			}
 
 			output, err := exec.Command("/bin/bash", "/kube-ovn/restore-ovn-nb-db.sh").CombinedOutput()

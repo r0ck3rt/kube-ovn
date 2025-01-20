@@ -1,11 +1,10 @@
 package request
 
 import (
-	"context"
 	"fmt"
-	"net"
 	"net/http"
 
+	"github.com/containernetworking/cni/pkg/types"
 	"github.com/parnurzeal/gorequest"
 )
 
@@ -16,48 +15,43 @@ type CniServerClient struct {
 
 // Route represents a requested route
 type Route struct {
-	Destination string `json:"dst"`
-	Gateway     string `json:"gw"`
+	Destination string `json:"dst,omitempty"`
+	Gateway     string `json:"gw,omitempty"`
 }
 
 // CniRequest is the cniserver request format
 type CniRequest struct {
-	CniType      string  `json:"cni_type"`
-	PodName      string  `json:"pod_name"`
-	PodNamespace string  `json:"pod_namespace"`
-	ContainerID  string  `json:"container_id"`
-	NetNs        string  `json:"net_ns"`
-	IfName       string  `json:"if_name"`
-	Provider     string  `json:"provider"`
-	Routes       []Route `json:"routes"`
-	VfDriver     string  `json:"vf_driver"`
+	CniType      string    `json:"cni_type"`
+	PodName      string    `json:"pod_name"`
+	PodNamespace string    `json:"pod_namespace"`
+	ContainerID  string    `json:"container_id"`
+	NetNs        string    `json:"net_ns"`
+	IfName       string    `json:"if_name"`
+	Provider     string    `json:"provider"`
+	Routes       []Route   `json:"routes"`
+	DNS          types.DNS `json:"dns"`
+	VfDriver     string    `json:"vf_driver"`
 	// PciAddrs in case of using sriov
 	DeviceID string `json:"deviceID"`
 	// dpdk
 	// empty dir volume for sharing vhost user unix socket
-	VhostUserSocketVolumeName string `json:"vhost_user_socket_volume_name"`
-	VhostUserSocketName       string `json:"vhost_user_socket_name"`
+	VhostUserSocketVolumeName  string `json:"vhost_user_socket_volume_name"`
+	VhostUserSocketName        string `json:"vhost_user_socket_name"`
+	VhostUserSocketConsumption string `json:"vhost_user_socket_consumption"`
 }
 
 // CniResponse is the cniserver response format
 type CniResponse struct {
-	Protocol   string `json:"protocol"`
-	IpAddress  string `json:"address"`
-	MacAddress string `json:"mac_address"`
-	CIDR       string `json:"cidr"`
-	Gateway    string `json:"gateway"`
-	Mtu        int    `json:"mtu"`
-	PodNicName string `json:"nicname"`
-	Err        string `json:"error"`
-}
-
-// NewCniServerClient return a new cniserver client
-func NewCniServerClient(socketAddress string) CniServerClient {
-	request := gorequest.New()
-	request.Transport = &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-		return net.Dial("unix", socketAddress)
-	}}
-	return CniServerClient{request}
+	Protocol   string    `json:"protocol"`
+	IPAddress  string    `json:"address"`
+	MacAddress string    `json:"mac_address"`
+	CIDR       string    `json:"cidr"`
+	Gateway    string    `json:"gateway"`
+	Routes     []Route   `json:"routes"`
+	Mtu        int       `json:"mtu"`
+	PodNicName string    `json:"nicname"`
+	DNS        types.DNS `json:"dns"`
+	Err        string    `json:"error"`
 }
 
 // Add pod request
@@ -67,7 +61,7 @@ func (csc CniServerClient) Add(podRequest CniRequest) (*CniResponse, error) {
 	if len(errors) != 0 {
 		return nil, errors[0]
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("request ip return %d %s", res.StatusCode, resp.Err)
 	}
 	return &resp, nil
@@ -79,7 +73,7 @@ func (csc CniServerClient) Del(podRequest CniRequest) error {
 	if len(errors) != 0 {
 		return errors[0]
 	}
-	if res.StatusCode != 204 {
+	if res.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("delete ip return %d %s", res.StatusCode, body)
 	}
 	return nil

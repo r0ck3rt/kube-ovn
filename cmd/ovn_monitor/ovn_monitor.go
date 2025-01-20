@@ -1,32 +1,72 @@
 package ovn_monitor
 
 import (
+	"net"
 	"net/http"
+	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/klog/v2"
+	"kernel.org/pub/linux/libs/security/libcap/cap"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
+	"github.com/kubeovn/kube-ovn/pkg/metrics"
 	ovn "github.com/kubeovn/kube-ovn/pkg/ovnmonitor"
+	"github.com/kubeovn/kube-ovn/pkg/util"
 	"github.com/kubeovn/kube-ovn/versions"
 )
 
 func CmdMain() {
 	defer klog.Flush()
 
-	klog.Infof(versions.String())
+	klog.Info(versions.String())
+
+	currentCaps := cap.GetProc()
+	klog.Infof("current capabilities: %s", currentCaps.String())
+
 	config, err := ovn.ParseFlags()
 	if err != nil {
-		klog.Fatalf("parse config failed %v", err)
+		util.LogFatalAndExit(err, "failed to parse config")
 	}
 
-	exporter := ovn.NewExporter(config)
-	if err = exporter.StartConnection(); err != nil {
-		klog.Errorf("%s failed to connect db socket properly: %s", ovn.GetExporterName(), err)
-		go exporter.TryClientConnection()
-	}
-	exporter.StartOvnMetrics()
+	ctrl.SetLogger(klog.NewKlogr())
+	ctx := signals.SetupSignalHandler()
 
-	http.Handle(config.MetricsPath, promhttp.Handler())
-	klog.Infoln("Listening on", config.ListenAddress)
-	klog.Fatal(http.ListenAndServe(config.ListenAddress, nil))
+	metricsAddr := util.GetDefaultListenAddr()
+	if config.EnableMetrics {
+		exporter := ovn.NewExporter(config)
+		if err = exporter.StartConnection(); err != nil {
+			klog.Errorf("%s failed to connect db socket properly: %s", ovn.GetExporterName(), err)
+			go exporter.TryClientConnection()
+		}
+		exporter.StartOvnMetrics()
+		addr := util.JoinHostPort(metricsAddr, config.MetricsPort)
+		if err = metrics.Run(ctx, nil, addr, config.SecureServing, false); err != nil {
+			util.LogFatalAndExit(err, "failed to run metrics server")
+		}
+	} else {
+		klog.Info("metrics server is disabled")
+		listerner, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(util.GetDefaultListenAddr()), Port: int(config.MetricsPort)})
+		if err != nil {
+			util.LogFatalAndExit(err, "failed to listen on %s", util.JoinHostPort(metricsAddr, config.MetricsPort))
+		}
+		svr := manager.Server{
+			Name: "health-check",
+			Server: &http.Server{
+				Handler:           http.NewServeMux(),
+				MaxHeaderBytes:    1 << 20,
+				IdleTimeout:       90 * time.Second,
+				ReadHeaderTimeout: 32 * time.Second,
+			},
+			Listener: listerner,
+		}
+		go func() {
+			if err = svr.Start(ctx); err != nil {
+				util.LogFatalAndExit(err, "failed to run health check server")
+			}
+		}()
+	}
+
+	<-ctx.Done()
 }

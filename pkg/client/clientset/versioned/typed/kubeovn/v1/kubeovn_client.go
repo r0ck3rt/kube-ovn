@@ -19,22 +19,35 @@ limitations under the License.
 package v1
 
 import (
-	"net/http"
+	http "net/http"
 
-	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
-	"github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned/scheme"
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	scheme "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )
 
 type KubeovnV1Interface interface {
 	RESTClient() rest.Interface
-	HtbQosesGetter
 	IPsGetter
+	IPPoolsGetter
+	IptablesDnatRulesGetter
+	IptablesEIPsGetter
+	IptablesFIPRulesGetter
+	IptablesSnatRulesGetter
+	OvnDnatRulesGetter
+	OvnEipsGetter
+	OvnFipsGetter
+	OvnSnatRulesGetter
 	ProviderNetworksGetter
+	QoSPoliciesGetter
 	SecurityGroupsGetter
 	SubnetsGetter
+	SwitchLBRulesGetter
+	VipsGetter
 	VlansGetter
 	VpcsGetter
+	VpcDnsesGetter
+	VpcEgressGatewaysGetter
 	VpcNatGatewaysGetter
 }
 
@@ -43,16 +56,52 @@ type KubeovnV1Client struct {
 	restClient rest.Interface
 }
 
-func (c *KubeovnV1Client) HtbQoses() HtbQosInterface {
-	return newHtbQoses(c)
-}
-
 func (c *KubeovnV1Client) IPs() IPInterface {
 	return newIPs(c)
 }
 
+func (c *KubeovnV1Client) IPPools() IPPoolInterface {
+	return newIPPools(c)
+}
+
+func (c *KubeovnV1Client) IptablesDnatRules() IptablesDnatRuleInterface {
+	return newIptablesDnatRules(c)
+}
+
+func (c *KubeovnV1Client) IptablesEIPs() IptablesEIPInterface {
+	return newIptablesEIPs(c)
+}
+
+func (c *KubeovnV1Client) IptablesFIPRules() IptablesFIPRuleInterface {
+	return newIptablesFIPRules(c)
+}
+
+func (c *KubeovnV1Client) IptablesSnatRules() IptablesSnatRuleInterface {
+	return newIptablesSnatRules(c)
+}
+
+func (c *KubeovnV1Client) OvnDnatRules() OvnDnatRuleInterface {
+	return newOvnDnatRules(c)
+}
+
+func (c *KubeovnV1Client) OvnEips() OvnEipInterface {
+	return newOvnEips(c)
+}
+
+func (c *KubeovnV1Client) OvnFips() OvnFipInterface {
+	return newOvnFips(c)
+}
+
+func (c *KubeovnV1Client) OvnSnatRules() OvnSnatRuleInterface {
+	return newOvnSnatRules(c)
+}
+
 func (c *KubeovnV1Client) ProviderNetworks() ProviderNetworkInterface {
 	return newProviderNetworks(c)
+}
+
+func (c *KubeovnV1Client) QoSPolicies() QoSPolicyInterface {
+	return newQoSPolicies(c)
 }
 
 func (c *KubeovnV1Client) SecurityGroups() SecurityGroupInterface {
@@ -63,12 +112,28 @@ func (c *KubeovnV1Client) Subnets() SubnetInterface {
 	return newSubnets(c)
 }
 
+func (c *KubeovnV1Client) SwitchLBRules() SwitchLBRuleInterface {
+	return newSwitchLBRules(c)
+}
+
+func (c *KubeovnV1Client) Vips() VipInterface {
+	return newVips(c)
+}
+
 func (c *KubeovnV1Client) Vlans() VlanInterface {
 	return newVlans(c)
 }
 
 func (c *KubeovnV1Client) Vpcs() VpcInterface {
 	return newVpcs(c)
+}
+
+func (c *KubeovnV1Client) VpcDnses() VpcDnsInterface {
+	return newVpcDnses(c)
+}
+
+func (c *KubeovnV1Client) VpcEgressGateways(namespace string) VpcEgressGatewayInterface {
+	return newVpcEgressGateways(c, namespace)
 }
 
 func (c *KubeovnV1Client) VpcNatGateways() VpcNatGatewayInterface {
@@ -120,10 +185,10 @@ func New(c rest.Interface) *KubeovnV1Client {
 }
 
 func setConfigDefaults(config *rest.Config) error {
-	gv := v1.SchemeGroupVersion
+	gv := kubeovnv1.SchemeGroupVersion
 	config.GroupVersion = &gv
 	config.APIPath = "/apis"
-	config.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
+	config.NegotiatedSerializer = rest.CodecFactoryForGeneratedClient(scheme.Scheme, scheme.Codecs).WithoutConversion()
 
 	if config.UserAgent == "" {
 		config.UserAgent = rest.DefaultKubernetesUserAgent()

@@ -1,33 +1,41 @@
 package speaker
 
 import (
-	"fmt"
-	"net/http"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/klog/v2"
-	"k8s.io/sample-controller/pkg/signals"
+	"kernel.org/pub/linux/libs/security/libcap/cap"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
+	"github.com/kubeovn/kube-ovn/pkg/metrics"
 	"github.com/kubeovn/kube-ovn/pkg/speaker"
+	"github.com/kubeovn/kube-ovn/pkg/util"
 	"github.com/kubeovn/kube-ovn/versions"
 )
 
 func CmdMain() {
 	defer klog.Flush()
 
-	klog.Infof(versions.String())
+	klog.Info(versions.String())
+
+	currentCaps := cap.GetProc()
+	klog.Infof("current capabilities: %s", currentCaps.String())
+
 	config, err := speaker.ParseFlags()
 	if err != nil {
-		klog.Fatalf("failed to parse config %v", err)
+		util.LogFatalAndExit(err, "failed to parse config")
 	}
 
-	stopCh := signals.SetupSignalHandler()
-	ctl := speaker.NewController(config)
-
+	ctrl.SetLogger(klog.NewKlogr())
+	ctx := signals.SetupSignalHandler()
 	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		klog.Fatal(http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", config.PprofPort), nil))
+		if config.EnableMetrics {
+			metrics.InitKlogMetrics()
+			if err = metrics.Run(ctx, nil, util.JoinHostPort("0.0.0.0", config.PprofPort), false, false); err != nil {
+				util.LogFatalAndExit(err, "failed to run metrics server")
+			}
+		}
+		<-ctx.Done()
 	}()
 
-	ctl.Run(stopCh)
+	speaker.NewController(config).Run(ctx.Done())
 }

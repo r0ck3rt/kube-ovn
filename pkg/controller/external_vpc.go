@@ -2,52 +2,51 @@ package controller
 
 import (
 	"context"
-	"fmt"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 
 	v1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	"github.com/kubeovn/kube-ovn/pkg/ovsdb/ovnnb"
 	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
+// syncExternalVpc syncs the non kubeovn created ovn vpc, such as neutron ovn vpc
 func (c *Controller) syncExternalVpc() {
-	logicalRouters, err := c.getRouterStatus()
-	klog.V(4).Infof("sync over with %s", logicalRouters)
+	logicalRouters, err := c.getNonKubeovnRouterStatus()
 	if err != nil {
-		klog.Error("list lr failed", err)
+		klog.Error("failed to list ovn logical routers", err)
 		return
 	}
+	klog.V(3).Infof("sync external vpcs with ovn non kube-ovn created vpc")
 	vpcs, err := c.vpcsLister.List(labels.SelectorFromSet(labels.Set{util.VpcExternalLabel: "true"}))
 	if err != nil {
 		klog.Errorf("failed to list vpc, %v", err)
 		return
 	}
-	vpcMaps := make(map[string]*v1.Vpc)
-	for _, vpc := range vpcs {
-		vpcMaps[vpc.Name] = vpc.DeepCopy()
-	}
-	for vpcName, vpc := range vpcMaps {
-		if _, ok := logicalRouters[vpcName]; ok {
+	for _, cachedVpc := range vpcs {
+		vpc := cachedVpc.DeepCopy()
+		if _, ok := logicalRouters[vpc.Name]; ok {
+			// update vpc status subnet list
 			vpc.Status.Subnets = []string{}
-			for _, asw := range logicalRouters[vpcName].LogicalSwitches {
-				vpc.Status.Subnets = append(vpc.Status.Subnets, asw.Name)
+			for _, ls := range logicalRouters[vpc.Name].LogicalSwitches {
+				vpc.Status.Subnets = append(vpc.Status.Subnets, ls.Name)
 			}
 			_, err = c.config.KubeOvnClient.KubeovnV1().Vpcs().UpdateStatus(context.Background(), vpc, metav1.UpdateOptions{})
 			if err != nil {
-				klog.V(4).Infof("update vpc %s status failed", vpcName)
+				klog.Errorf("failed to update vpc %s status: %v", vpc.Name, err)
 				continue
 			}
-			delete(logicalRouters, vpcName)
-			klog.V(4).Infof("patch vpc %s", vpcName)
+			delete(logicalRouters, vpc.Name)
 		} else {
-			err = c.config.KubeOvnClient.KubeovnV1().Vpcs().Delete(context.Background(), vpcName, metav1.DeleteOptions{})
+			klog.Infof("external vpc %s has no ovn logical router, delete it", vpc.Name)
+			err = c.config.KubeOvnClient.KubeovnV1().Vpcs().Delete(context.Background(), vpc.Name, metav1.DeleteOptions{})
 			if err != nil {
-				klog.V(4).Infof("delete vpc %s failed", vpcName)
+				klog.Errorf("failed to delete vpc %s: %v", vpc.Name, err)
 				continue
 			}
-			klog.V(4).Infof("delete vpc %s ", vpcName)
 		}
 	}
 	if len(logicalRouters) != 0 {
@@ -58,7 +57,7 @@ func (c *Controller) syncExternalVpc() {
 			vpc.Labels = map[string]string{util.VpcExternalLabel: "true"}
 			vpc, err = c.config.KubeOvnClient.KubeovnV1().Vpcs().Create(context.Background(), vpc, metav1.CreateOptions{})
 			if err != nil {
-				klog.Errorf("init vpc %s failed %v", routerName, err)
+				klog.Errorf("failed init external vpc %s, %v", routerName, err)
 				return
 			}
 
@@ -73,50 +72,49 @@ func (c *Controller) syncExternalVpc() {
 
 			_, err = c.config.KubeOvnClient.KubeovnV1().Vpcs().UpdateStatus(context.Background(), vpc, metav1.UpdateOptions{})
 			if err != nil {
-				klog.Errorf("update vpc status failed %v", err)
+				klog.Errorf("failed to update vpc %s status, %v", routerName, err)
 				return
 			}
-			klog.V(4).Infof("add vpc %s ", routerName)
+			klog.V(4).Infof("added external vpc %s", routerName)
 		}
 	}
 }
 
-func (c *Controller) getRouterStatus() (logicalRouters map[string]util.LogicalRouter, err error) {
+func (c *Controller) getNonKubeovnRouterStatus() (logicalRouters map[string]util.LogicalRouter, err error) {
 	logicalRouters = make(map[string]util.LogicalRouter)
-	externalOvnRouters, err := c.ovnClient.CustomFindEntity("logical_router", []string{"name", "port"}, fmt.Sprintf("external_ids{!=}vendor=%s", util.CniTypeName))
+	nonKubeovnRouters, err := c.OVNNbClient.ListLogicalRouter(false, func(lr *ovnnb.LogicalRouter) bool {
+		return len(lr.ExternalIDs) == 0 || lr.ExternalIDs["vendor"] != util.CniTypeName
+	})
 	if err != nil {
-		klog.Errorf("failed to list external logical router, %v", err)
+		klog.Errorf("failed to list non kubeovn logical router, %v", err)
 		return logicalRouters, err
 	}
-	if len(externalOvnRouters) == 0 {
-		klog.V(4).Info("sync over, no external vpc")
+	if len(nonKubeovnRouters) == 0 {
+		klog.V(4).Info("no non kubeovn logical router")
 		return logicalRouters, nil
 	}
 
-	for _, aExternalRouter := range externalOvnRouters {
-		var aLogicalRouter util.LogicalRouter
-		aLogicalRouter.Name = aExternalRouter["name"][0]
-		var ports []util.Port
-		for _, portUUId := range aExternalRouter["port"] {
-			portName, err := c.ovnClient.GetEntityInfo("logical_router_port", portUUId, []string{"name"})
+	for _, router := range nonKubeovnRouters {
+		lr := util.LogicalRouter{
+			Name:  router.Name,
+			Ports: make([]util.Port, 0, len(router.Ports)),
+		}
+		for _, uuid := range router.Ports {
+			lrp, err := c.OVNNbClient.GetLogicalRouterPortByUUID(uuid)
 			if err != nil {
-				klog.Info("get port error")
+				klog.Warningf("failed to get LRP by UUID %s: %v", uuid, err)
 				continue
 			}
-			aPort := util.Port{
-				Name:   portName["name"],
-				Subnet: "",
-			}
-			ports = append(ports, aPort)
+			lr.Ports = append(lr.Ports, util.Port{Name: lrp.Name})
 		}
-		aLogicalRouter.Ports = ports
-		logicalRouters[aLogicalRouter.Name] = aLogicalRouter
+		logicalRouters[lr.Name] = lr
 	}
-	UUID := "_uuid"
 	for routerName, logicalRouter := range logicalRouters {
 		tmpRouter := logicalRouter
 		for _, port := range logicalRouter.Ports {
-			peerPorts, err := c.ovnClient.CustomFindEntity("logical_switch_port", []string{UUID}, fmt.Sprintf("options:router-port=%s", port.Name))
+			peerPorts, err := c.OVNNbClient.ListLogicalSwitchPorts(false, nil, func(lsp *ovnnb.LogicalSwitchPort) bool {
+				return len(lsp.Options) != 0 && lsp.Options["router-port"] == port.Name
+			})
 			if err != nil || len(peerPorts) > 1 {
 				klog.Errorf("failed to list peer port of %s, %v", port, err)
 				continue
@@ -124,13 +122,16 @@ func (c *Controller) getRouterStatus() (logicalRouters map[string]util.LogicalRo
 			if len(peerPorts) == 0 {
 				continue
 			}
-			switches, err := c.ovnClient.CustomFindEntity("logical_switch", []string{"name"}, fmt.Sprintf("ports{>=}%s", peerPorts[0][UUID][0]))
+			lsp := peerPorts[0]
+			switches, err := c.OVNNbClient.ListLogicalSwitch(false, func(ls *ovnnb.LogicalSwitch) bool {
+				return slices.Contains(ls.Ports, lsp.UUID)
+			})
 			if err != nil || len(switches) > 1 {
-				klog.Errorf("failed to list peer switch of %s, %v", peerPorts, err)
+				klog.Errorf("failed to get logical switch of LSP %s: %v", lsp.Name, err)
 				continue
 			}
 			var aLogicalSwitch util.LogicalSwitch
-			aLogicalSwitch.Name = switches[0]["name"][0]
+			aLogicalSwitch.Name = switches[0].Name
 			tmpRouter.LogicalSwitches = append(tmpRouter.LogicalSwitches, aLogicalSwitch)
 		}
 		logicalRouters[routerName] = tmpRouter

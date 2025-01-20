@@ -2,6 +2,10 @@
 
 set -u -e
 
+mkdir -p /usr/local/bin
+cp -f /kube-ovn/kubectl-ko /usr/local/bin/
+chmod +x /usr/local/bin/kubectl-ko
+
 if [[ -f "/proc/sys/net/ipv4/ip_forward" ]];
     then echo 1 > /proc/sys/net/ipv4/ip_forward;
 fi
@@ -35,3 +39,5 @@ yes | cp -f $LOOPBACK_BIN_SRC $LOOPBACK_BIN_DST || exit_with_error "Failed to co
 yes | cp -f $PORTMAP_BIN_SRC $PORTMAP_BIN_DST || exit_with_error "Failed to copy $PORTMAP_BIN_SRC to $PORTMAP_BIN_DST"
 yes | cp -f $CNI_BIN_SRC $CNI_BIN_DST || exit_with_error "Failed to copy $CNI_BIN_SRC to $CNI_BIN_DST"
 yes | cp -f $MACVLAN_BIN_SRC $MACVLAN_BIN_DST || exit_with_error "Failed to copy $MACVLAN_BIN_SRC to $MACVLAN_BIN_DST"
+
+./kube-ovn-daemon --install-cni-config $@ || exit_with_error "Failed to install cni config"

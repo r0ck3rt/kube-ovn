@@ -9,68 +9,113 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
-	"github.com/vishvananda/netlink"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
 	clientset "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned"
 	"github.com/kubeovn/kube-ovn/pkg/util"
 )
 
 // Configuration is the daemon conf
 type Configuration struct {
-	Iface                   string
-	DPDKTunnelIface         string
-	MTU                     int
-	MSS                     int
-	EnableMirror            bool
-	MirrorNic               string
-	BindSocket              string
-	OvsSocket               string
-	KubeConfigFile          string
-	KubeClient              kubernetes.Interface
-	KubeOvnClient           clientset.Interface
-	NodeName                string
-	ServiceClusterIPRange   string
-	NodeLocalDnsIP          string
-	EncapChecksum           bool
-	PprofPort               int
-	NetworkType             string
-	CniConfName             string
-	DefaultProviderName     string
-	DefaultInterfaceName    string
-	ExternalGatewayConfigNS string
+	InstallCNIConfig bool
+	CniConfDir       string
+	CniConfFile      string
+	CniConfName      string
+
+	// interface being used for tunnel
+	tunnelIface               string
+	Iface                     string
+	DPDKTunnelIface           string
+	MTU                       int
+	MSS                       int
+	EnableMirror              bool
+	MirrorNic                 string
+	BindSocket                string
+	OvsSocket                 string
+	KubeConfigFile            string
+	KubeClient                kubernetes.Interface
+	KubeOvnClient             clientset.Interface
+	NodeName                  string
+	ServiceClusterIPRange     string
+	ClusterRouter             string
+	NodeSwitch                string
+	EncapChecksum             bool
+	EnablePprof               bool
+	MacLearningFallback       bool
+	PprofPort                 int32
+	SecureServing             bool
+	NetworkType               string
+	DefaultProviderName       string
+	DefaultInterfaceName      string
+	ExternalGatewayConfigNS   string
+	ExternalGatewaySwitch     string // provider network underlay vlan subnet
+	EnableMetrics             bool
+	EnableOVNIPSec            bool
+	EnableArpDetectIPConflict bool
+	KubeletDir                string
+	EnableVerboseConnCheck    bool
+	TCPConnCheckPort          int32
+	UDPConnCheckPort          int32
+	EnableTProxy              bool
+	OVSVsctlConcurrency       int32
+	SetVxlanTxOff             bool
 }
 
 // ParseFlags will parse cmd args then init kubeClient and configuration
 // TODO: validate configuration
-func ParseFlags(nicBridgeMappings map[string]string) (*Configuration, error) {
+func ParseFlags() *Configuration {
 	var (
+		argInstallCNIConfig = pflag.Bool("install-cni-config", false, "Install CNI config")
+		argCniConfDir       = pflag.String("cni-conf-dir", "/etc/cni/net.d", "Path of the CNI config directory.")
+		argCniConfFile      = pflag.String("cni-conf-file", "/kube-ovn/01-kube-ovn.conflist", "Path of the CNI config file.")
+		argsCniConfName     = pflag.String("cni-conf-name", "01-kube-ovn.conflist", "Specify the name of kube ovn conflist name in dir /etc/cni/net.d/, default: 01-kube-ovn.conflist")
+
+		argNodeName              = pflag.String("node-name", "", "Name of the node on which the daemon is running on.")
 		argIface                 = pflag.String("iface", "", "The iface used to inter-host pod communication, can be a nic name or a group of regex separated by comma (default the default route iface)")
 		argDPDKTunnelIface       = pflag.String("dpdk-tunnel-iface", "br-phy", "Specifies the name of the dpdk tunnel iface.")
 		argMTU                   = pflag.Int("mtu", 0, "The MTU used by pod iface in overlay networks (default iface MTU - 100)")
 		argEnableMirror          = pflag.Bool("enable-mirror", false, "Enable traffic mirror (default false)")
 		argMirrorNic             = pflag.String("mirror-iface", "mirror0", "The mirror nic name that will be created by kube-ovn")
-		argBindSocket            = pflag.String("bind-socket", "/run/openvswitch/kube-ovn-daemon.sock", "The socket daemon bind to.")
+		argBindSocket            = pflag.String("bind-socket", defaultBindSocket, "The socket daemon bind to.")
 		argOvsSocket             = pflag.String("ovs-socket", "", "The socket to local ovs-server")
 		argKubeConfigFile        = pflag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information. If not set use the inCluster token.")
 		argServiceClusterIPRange = pflag.String("service-cluster-ip-range", "10.96.0.0/12", "The kubernetes service cluster ip range")
-		argNodeLocalDnsIP        = pflag.String("node-local-dns-ip", "", "If use nodelocaldns the local dns server ip should be set here.")
+		argClusterRouter         = pflag.String("cluster-router", util.DefaultVpc, "The router name for cluster router")
+		argNodeSwitch            = pflag.String("node-switch", "join", "The name of node gateway switch which help node to access pod network")
 		argEncapChecksum         = pflag.Bool("encap-checksum", true, "Enable checksum")
-		argPprofPort             = pflag.Int("pprof-port", 10665, "The port to get profiling data")
+		argEnablePprof           = pflag.Bool("enable-pprof", false, "Enable pprof")
+		argPprofPort             = pflag.Int32("pprof-port", 10665, "The port to get profiling data")
+		argSecureServing         = pflag.Bool("secure-serving", false, "Enable secure serving")
+		argMacLearningFallback   = pflag.Bool("mac-learning-fallback", false, "Fallback to the legacy MAC learning mode")
 
-		argsNetworkType            = pflag.String("network-type", "geneve", "The ovn network type")
-		argsCniConfName            = pflag.String("cni-conf-name", "01-kube-ovn.conflist", "Specify the name of kube ovn conflist name in dir /etc/cni/net.d/, default: 01-kube-ovn.conflist")
-		argsDefaultProviderName    = pflag.String("default-provider-name", "provider", "The vlan or vxlan type default provider interface name")
-		argsDefaultInterfaceName   = pflag.String("default-interface-name", "", "The default host interface name in the vlan/vxlan type")
-		argExternalGatewayConfigNS = pflag.String("external-gateway-config-ns", "kube-system", "The namespace of configmap external-gateway-config, default: kube-system")
+		argsNetworkType              = pflag.String("network-type", util.NetworkTypeGeneve, "Tunnel encapsulation protocol in overlay networks")
+		argsDefaultProviderName      = pflag.String("default-provider-name", "provider", "The vlan or vxlan type default provider interface name")
+		argsDefaultInterfaceName     = pflag.String("default-interface-name", "", "The default host interface name in the vlan/vxlan type")
+		argExternalGatewayConfigNS   = pflag.String("external-gateway-config-ns", "kube-system", "The namespace of configmap external-gateway-config, default: kube-system")
+		argExternalGatewaySwitch     = pflag.String("external-gateway-switch", "external", "The name of the external gateway switch which is a ovs bridge to provide external network, default: external")
+		argEnableMetrics             = pflag.Bool("enable-metrics", true, "Whether to support metrics query")
+		argEnableArpDetectIPConflict = pflag.Bool("enable-arp-detect-ip-conflict", true, "Whether to support arp detect ip conflict in vlan network")
+		argKubeletDir                = pflag.String("kubelet-dir", "/var/lib/kubelet", "Path of the kubelet dir, default: /var/lib/kubelet")
+		argEnableVerboseConnCheck    = pflag.Bool("enable-verbose-conn-check", false, "enable TCP/UDP connectivity check listen port")
+		argTCPConnectivityCheckPort  = pflag.Int32("tcp-conn-check-port", 8100, "TCP connectivity Check Port")
+		argUDPConnectivityCheckPort  = pflag.Int32("udp-conn-check-port", 8101, "UDP connectivity Check Port")
+		argEnableTProxy              = pflag.Bool("enable-tproxy", false, "enable tproxy for vpc pod liveness or readiness probe")
+		argOVSVsctlConcurrency       = pflag.Int32("ovs-vsctl-concurrency", 100, "concurrency limit of ovs-vsctl")
+		argEnableOVNIPSec            = pflag.Bool("enable-ovn-ipsec", false, "Whether to enable ovn ipsec")
+		argSetVxlanTxOff             = pflag.Bool("set-vxlan-tx-off", false, "Whether to set vxlan_sys_4789 tx off")
 	)
 
 	// mute info log for ipset lib
@@ -85,7 +130,7 @@ func ParseFlags(nicBridgeMappings map[string]string) (*Configuration, error) {
 		if f2 != nil {
 			value := f1.Value.String()
 			if err := f2.Value.Set(value); err != nil {
-				klog.Fatalf("failed to set flag, %v", err)
+				util.LogFatalAndExit(err, "failed to set flag")
 			}
 		}
 	})
@@ -94,51 +139,74 @@ func ParseFlags(nicBridgeMappings map[string]string) (*Configuration, error) {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
 
-	nodeName := os.Getenv(util.HostnameEnv)
-	if nodeName == "" {
-		klog.Errorf("env KUBE_NODE_NAME not exists")
-		return nil, fmt.Errorf("env KUBE_NODE_NAME not exists")
-	}
 	config := &Configuration{
-		Iface:                   *argIface,
-		DPDKTunnelIface:         *argDPDKTunnelIface,
-		MTU:                     *argMTU,
-		EnableMirror:            *argEnableMirror,
-		MirrorNic:               *argMirrorNic,
-		BindSocket:              *argBindSocket,
-		OvsSocket:               *argOvsSocket,
-		KubeConfigFile:          *argKubeConfigFile,
-		PprofPort:               *argPprofPort,
-		NodeName:                nodeName,
-		ServiceClusterIPRange:   *argServiceClusterIPRange,
-		NodeLocalDnsIP:          *argNodeLocalDnsIP,
-		EncapChecksum:           *argEncapChecksum,
-		NetworkType:             *argsNetworkType,
-		CniConfName:             *argsCniConfName,
-		DefaultProviderName:     *argsDefaultProviderName,
-		DefaultInterfaceName:    *argsDefaultInterfaceName,
-		ExternalGatewayConfigNS: *argExternalGatewayConfigNS,
+		InstallCNIConfig:          *argInstallCNIConfig,
+		CniConfDir:                *argCniConfDir,
+		CniConfFile:               *argCniConfFile,
+		CniConfName:               *argsCniConfName,
+		Iface:                     *argIface,
+		DPDKTunnelIface:           *argDPDKTunnelIface,
+		MTU:                       *argMTU,
+		EnableMirror:              *argEnableMirror,
+		MirrorNic:                 *argMirrorNic,
+		BindSocket:                *argBindSocket,
+		OvsSocket:                 *argOvsSocket,
+		KubeConfigFile:            *argKubeConfigFile,
+		EnablePprof:               *argEnablePprof,
+		SecureServing:             *argSecureServing,
+		PprofPort:                 *argPprofPort,
+		MacLearningFallback:       *argMacLearningFallback,
+		NodeName:                  strings.ToLower(*argNodeName),
+		ServiceClusterIPRange:     *argServiceClusterIPRange,
+		ClusterRouter:             *argClusterRouter,
+		NodeSwitch:                *argNodeSwitch,
+		EncapChecksum:             *argEncapChecksum,
+		NetworkType:               *argsNetworkType,
+		DefaultProviderName:       *argsDefaultProviderName,
+		DefaultInterfaceName:      *argsDefaultInterfaceName,
+		ExternalGatewayConfigNS:   *argExternalGatewayConfigNS,
+		ExternalGatewaySwitch:     *argExternalGatewaySwitch,
+		EnableMetrics:             *argEnableMetrics,
+		EnableOVNIPSec:            *argEnableOVNIPSec,
+		EnableArpDetectIPConflict: *argEnableArpDetectIPConflict,
+		KubeletDir:                *argKubeletDir,
+		EnableVerboseConnCheck:    *argEnableVerboseConnCheck,
+		TCPConnCheckPort:          *argTCPConnectivityCheckPort,
+		UDPConnCheckPort:          *argUDPConnectivityCheckPort,
+		EnableTProxy:              *argEnableTProxy,
+		OVSVsctlConcurrency:       *argOVSVsctlConcurrency,
+		SetVxlanTxOff:             *argSetVxlanTxOff,
+	}
+	return config
+}
+
+func (config *Configuration) Init(nicBridgeMappings map[string]string) error {
+	if config.NodeName == "" {
+		klog.Info("node name not specified in command line parameters, fall back to the environment variable")
+		if config.NodeName = strings.ToLower(os.Getenv(util.HostnameEnv)); config.NodeName == "" {
+			klog.Info("node name not specified in environment variables, fall back to the hostname")
+			hostname, err := os.Hostname()
+			if err != nil {
+				return fmt.Errorf("failed to get hostname: %w", err)
+			}
+			config.NodeName = strings.ToLower(hostname)
+		}
 	}
 
 	if err := config.initKubeClient(); err != nil {
-		return nil, err
+		klog.Error(err)
+		return err
 	}
-
 	if err := config.initNicConfig(nicBridgeMappings); err != nil {
-		return nil, err
+		klog.Error(err)
+		return err
 	}
 
 	klog.Infof("daemon config: %v", config)
-	return config, nil
+	return nil
 }
 
 func (config *Configuration) initNicConfig(nicBridgeMappings map[string]string) error {
-	var (
-		iface   *net.Interface
-		err     error
-		encapIP string
-	)
-
 	// Support to specify node network card separately
 	node, err := config.KubeClient.CoreV1().Nodes().Get(context.Background(), config.NodeName, metav1.GetOptions{})
 	if err != nil {
@@ -151,21 +219,18 @@ func (config *Configuration) initNicConfig(nicBridgeMappings map[string]string) 
 	}
 
 	isDPDKNode := node.GetLabels()[util.OvsDpTypeLabel] == "userspace"
-
 	if isDPDKNode {
 		config.Iface = config.DPDKTunnelIface
 	}
+
+	var mtu int
+	var encapIP string
 	if config.Iface == "" {
-		podIP, ok := os.LookupEnv(util.POD_IP)
-		if !ok || podIP == "" {
-			return errors.New("failed to lookup env POD_IP")
-		}
-		iface, err = getIfaceOwnPodIP(podIP)
-		if err != nil {
-			klog.Errorf("failed to find POD_IP iface %v", err)
+		encapIP = config.getEncapIP(node)
+		if config.Iface, mtu, err = getIfaceByIP(encapIP); err != nil {
+			klog.Errorf("failed to get interface by IP %s: %v", encapIP, err)
 			return err
 		}
-		encapIP = podIP
 	} else {
 		tunnelNic := config.Iface
 		if brName := nicBridgeMappings[tunnelNic]; brName != "" {
@@ -173,33 +238,99 @@ func (config *Configuration) initNicConfig(nicBridgeMappings map[string]string) 
 			tunnelNic = brName
 		}
 
-		iface, err = findInterface(tunnelNic)
+		iface, err := findInterface(tunnelNic)
 		if err != nil {
 			klog.Errorf("failed to find iface %s, %v", tunnelNic, err)
 			return err
 		}
+		srcIPs, err := getSrcIPsByRoutes(iface)
+		if err != nil {
+			return fmt.Errorf("failed to get src IPs by routes on interface %s: %w", iface.Name, err)
+		}
 		addrs, err := iface.Addrs()
 		if err != nil {
-			return fmt.Errorf("failed to get iface addr. %v", err)
+			return fmt.Errorf("failed to get iface addr. %w", err)
 		}
-		if len(addrs) == 0 {
-			return fmt.Errorf("iface %s has no ip address", tunnelNic)
+		for _, addr := range addrs {
+			_, ipCidr, err := net.ParseCIDR(addr.String())
+			if err != nil {
+				klog.Errorf("Failed to parse CIDR address %s: %v", addr.String(), err)
+				continue
+			}
+			// exclude the vip as encap ip
+			if ones, bits := ipCidr.Mask.Size(); ones == bits {
+				klog.Infof("Skip address %s", ipCidr.String())
+				continue
+			}
+
+			ipStr := strings.Split(addr.String(), "/")[0]
+			if ip := net.ParseIP(ipStr); ip == nil || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			if len(srcIPs) == 0 || slices.Contains(srcIPs, ipStr) {
+				encapIP = ipStr
+				break
+			}
 		}
-		encapIP = strings.Split(addrs[0].String(), "/")[0]
+		if len(encapIP) == 0 {
+			return fmt.Errorf("iface %s has no valid IP address", tunnelNic)
+		}
+
+		klog.Infof("use %s on %s as tunnel address", encapIP, iface.Name)
+		mtu = iface.MTU
+		config.tunnelIface = iface.Name
+	}
+
+	encapIsIPv6 := util.CheckProtocol(encapIP) == kubeovnv1.ProtocolIPv6
+	if encapIsIPv6 && runtime.GOOS == "windows" {
+		// OVS windows datapath does not IPv6 tunnel in version v2.17
+		err = errors.New("IPv6 tunnel is not supported on Windows currently")
+		klog.Error(err)
+		return err
 	}
 
 	if config.MTU == 0 {
-		config.MTU = iface.MTU - util.GeneveHeaderLength
-	}
-
-	config.MSS = config.MTU - util.TcpIpHeaderLength
-	if !config.EncapChecksum {
-		if err := disableChecksum(); err != nil {
-			klog.Errorf("failed to set checksum offload, %v", err)
+		switch config.NetworkType {
+		case util.NetworkTypeGeneve, util.NetworkTypeVlan:
+			config.MTU = mtu - util.GeneveHeaderLength
+		case util.NetworkTypeVxlan:
+			config.MTU = mtu - util.VxlanHeaderLength
+		case util.NetworkTypeStt:
+			config.MTU = mtu - util.SttHeaderLength
+		default:
+			return fmt.Errorf("invalid network type: %s", config.NetworkType)
+		}
+		if encapIsIPv6 {
+			// IPv6 header size is 40
+			config.MTU -= 20
 		}
 	}
 
+	config.MSS = config.MTU - util.TCPIPHeaderLength
+
+	if err := setChecksum(config.EncapChecksum); err != nil {
+		klog.Errorf("failed to set checksum offload, %v", err)
+	}
+
+	if err = config.initRuntimeConfig(node); err != nil {
+		klog.Error(err)
+		return err
+	}
+
 	return setEncapIP(encapIP)
+}
+
+func (config *Configuration) getEncapIP(node *corev1.Node) string {
+	if podIP := os.Getenv(util.PodIP); podIP != "" {
+		return podIP
+	}
+
+	klog.Info("environment variable POD_IP not found, fall back to node address")
+	ipv4, ipv6 := util.GetNodeInternalIP(*node)
+	if ipv4 != "" {
+		return ipv4
+	}
+	return ipv6
 }
 
 func findInterface(ifaceStr string) (*net.Interface, error) {
@@ -219,7 +350,6 @@ func findInterface(ifaceStr string) (*net.Interface, error) {
 	}
 	for _, iface := range ifaces {
 		if ifaceRegex.MatchString(iface.Name) {
-			klog.Infof("use %s as tunnel interface", iface.Name)
 			return &iface, nil
 		}
 	}
@@ -244,6 +374,13 @@ func (config *Configuration) initKubeClient() error {
 			return err
 		}
 	}
+
+	// try to connect to apiserver's tcp port
+	if err = util.DialAPIServer(cfg.Host, 3*time.Second, 10); err != nil {
+		klog.Errorf("failed to dial apiserver: %v", err)
+		return err
+	}
+
 	cfg.QPS = 1000
 	cfg.Burst = 2000
 
@@ -265,34 +402,8 @@ func (config *Configuration) initKubeClient() error {
 	return nil
 }
 
-func getIfaceOwnPodIP(podIP string) (*net.Interface, error) {
-	links, err := netlink.LinkList()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, link := range links {
-		addrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get a list of IP addresses %v", err)
-		}
-		for _, addr := range addrs {
-			if addr.IPNet.Contains(net.ParseIP(podIP)) && addr.IP.String() == podIP {
-				return &net.Interface{
-					Index:        link.Attrs().Index,
-					MTU:          link.Attrs().MTU,
-					Name:         link.Attrs().Name,
-					HardwareAddr: link.Attrs().HardwareAddr,
-					Flags:        link.Attrs().Flags,
-				}, nil
-			}
-		}
-	}
-
-	return nil, errors.New("unable to find podIP interface")
-}
-
 func setEncapIP(ip string) error {
+	// #nosec G204
 	raw, err := exec.Command(
 		"ovs-vsctl", "set", "open", ".", fmt.Sprintf("external-ids:ovn-encap-ip=%s", ip)).CombinedOutput()
 	if err != nil {
@@ -301,11 +412,12 @@ func setEncapIP(ip string) error {
 	return nil
 }
 
-func disableChecksum() error {
-	raw, err := exec.Command(
-		"ovs-vsctl", "set", "open", ".", "external-ids:ovn-encap-csum=false").CombinedOutput()
+func setChecksum(encapChecksum bool) error {
+	// #nosec G204
+	raw, err := exec.Command("ovs-vsctl", "set", "open", ".", fmt.Sprintf("external-ids:ovn-encap-csum=%v", encapChecksum)).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to set ovn-encap-csum, %s", string(raw))
+		klog.Error(err)
+		return fmt.Errorf("failed to set ovn-encap-csum to %v: %s", encapChecksum, string(raw))
 	}
 	return nil
 }
