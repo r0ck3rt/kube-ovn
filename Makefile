@@ -21,12 +21,12 @@ FRR_IMAGE = quay.io/frrouting/frr:$(FRR_VERSION)
 CLAB_IMAGE = ghcr.io/srl-labs/clab:0.68.0
 
 # renovate: datasource=github-releases depName=multus packageName=k8snetworkplumbingwg/multus-cni
-MULTUS_VERSION = v4.2.0
+MULTUS_VERSION = v4.2.1
 MULTUS_IMAGE = ghcr.io/k8snetworkplumbingwg/multus-cni:$(MULTUS_VERSION)-thick
 MULTUS_YAML = https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/$(MULTUS_VERSION)/deployments/multus-daemonset-thick.yml
 
 # renovate: datasource=github-releases depName=metallb packageName=metallb/metallb
-METALLB_VERSION = v0.15.0
+METALLB_VERSION = v0.15.2
 METALLB_CHART_REPO = https://metallb.github.io/metallb
 METALLB_CONTROLLER_IMAGE = quay.io/metallb/controller:$(METALLB_VERSION)
 METALLB_SPEAKER_IMAGE = quay.io/metallb/speaker:$(METALLB_VERSION)
