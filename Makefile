@@ -21,18 +21,18 @@ FRR_IMAGE = quay.io/frrouting/frr:$(FRR_VERSION)
 CLAB_IMAGE = ghcr.io/srl-labs/clab:0.68.0
 
 # renovate: datasource=github-releases depName=multus packageName=k8snetworkplumbingwg/multus-cni
-MULTUS_VERSION = v4.2.0
+MULTUS_VERSION = v4.2.1
 MULTUS_IMAGE = ghcr.io/k8snetworkplumbingwg/multus-cni:$(MULTUS_VERSION)-thick
 MULTUS_YAML = https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/$(MULTUS_VERSION)/deployments/multus-daemonset-thick.yml
 
 # renovate: datasource=github-releases depName=metallb packageName=metallb/metallb
-METALLB_VERSION = v0.15.0
+METALLB_VERSION = v0.15.2
 METALLB_CHART_REPO = https://metallb.github.io/metallb
 METALLB_CONTROLLER_IMAGE = quay.io/metallb/controller:$(METALLB_VERSION)
 METALLB_SPEAKER_IMAGE = quay.io/metallb/speaker:$(METALLB_VERSION)
 
 # renovate: datasource=github-releases depName=kubevirt packageName=kubevirt/kubevirt
-KUBEVIRT_VERSION = v1.5.1
+KUBEVIRT_VERSION = v1.5.2
 KUBEVIRT_OPERATOR_IMAGE = quay.io/kubevirt/virt-operator:$(KUBEVIRT_VERSION)
 KUBEVIRT_API_IMAGE = quay.io/kubevirt/virt-api:$(KUBEVIRT_VERSION)
 KUBEVIRT_CONTROLLER_IMAGE = quay.io/kubevirt/virt-controller:$(KUBEVIRT_VERSION)
@@ -46,7 +46,7 @@ CILIUM_VERSION = v1.17.4
 CILIUM_IMAGE_REPO = quay.io/cilium
 
 # renovate: datasource=github-releases depName=cert-manager packageName=cert-manager/cert-manager
-CERT_MANAGER_VERSION = v1.17.2
+CERT_MANAGER_VERSION = v1.18.0
 CERT_MANAGER_CONTROLLER = quay.io/jetstack/cert-manager-controller:$(CERT_MANAGER_VERSION)
 CERT_MANAGER_CAINJECTOR = quay.io/jetstack/cert-manager-cainjector:$(CERT_MANAGER_VERSION)
 CERT_MANAGER_WEBHOOK = quay.io/jetstack/cert-manager-webhook:$(CERT_MANAGER_VERSION)

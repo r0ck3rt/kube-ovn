@@ -1281,6 +1281,63 @@
  * 张祖建
  * 袁又袁
 
+## v1.12.34 (2025-06-11)
+
+ * [2e5315080](https://github.com/kubeovn/kube-ovn/commit/2e5315080603750409d2114108c46967057b124b) release v1.12.34
+ * [b1cb20a7f](https://github.com/kubeovn/kube-ovn/commit/b1cb20a7fc7dda9a4270740df066106de445f37b) fix sts/vm lsp in incorrect port groups after rescheduled to another node (#5346)
+ * [189ce7525](https://github.com/kubeovn/kube-ovn/commit/189ce7525f2293f9496ec2822c453c06db2a9f00) prepare for next release
+
+### Contributors
+
+ * Mengxin Liu
+ * 张祖建
+
+## v1.12.33 (2025-06-09)
+
+ * [2e5ef48cd](https://github.com/kubeovn/kube-ovn/commit/2e5ef48cde8c085068c3adfe0342e018e68dbef1) release v1.12.33
+ * [25ad657a3](https://github.com/kubeovn/kube-ovn/commit/25ad657a372e56a0163ed174dc43d6f0a53553b0) add dad check (#5333)
+ * [0594fa43e](https://github.com/kubeovn/kube-ovn/commit/0594fa43e8852bba2fff3db9568d1adb32ac4e64) netpol: fix missing ACL name (#5281)
+ * [5b4cc8ac9](https://github.com/kubeovn/kube-ovn/commit/5b4cc8ac9e69a0bafea58617de92abba79b8ce08) fix: kubectl-ko: properly get the number of nodes (#5327)
+ * [c505d25ca](https://github.com/kubeovn/kube-ovn/commit/c505d25ca6a1043cdb90c8dca290843698e8cb8a) prepare for next release
+
+### Contributors
+
+ * Mengxin Liu
+ * Robin Lee
+ * changluyi
+ * 张祖建
+
+## v1.12.32 (2025-06-06)
+
+ * [fb2c1d8f4](https://github.com/kubeovn/kube-ovn/commit/fb2c1d8f4eb0d6d288ddf78f2f5065f007edf0cb) release v1.12.32
+ * [9cc2a4875](https://github.com/kubeovn/kube-ovn/commit/9cc2a48756ea21e24e29f339102664370e1b98f4) bump go to 1.23.10 (#5323)
+ * [8ff160589](https://github.com/kubeovn/kube-ovn/commit/8ff1605897b4ddebfc82711c14ab7ce8d8e85c78) fix podcidr route still use join ip as src ip (#5287)
+ * [d73f752f7](https://github.com/kubeovn/kube-ovn/commit/d73f752f7aafa0f1fa53c0b15df677acdd15ad9f) ci: fix cilium chaining with underlay networking (#5226)
+ * [54021bf79](https://github.com/kubeovn/kube-ovn/commit/54021bf79b607bc32e797a208b586a9aa728957a) base: use local patch files (#5207)
+ * [2bf56792d](https://github.com/kubeovn/kube-ovn/commit/2bf56792d52dd354a5d08819ca3f4da911ae4dda) bump k8s to v1.30.12 (#5185)
+ * [9f27024ee](https://github.com/kubeovn/kube-ovn/commit/9f27024ee6a72f26f9589cd1c1d249470dd26cbd) controller: ensure ovn route policy is reconciled after node is initialized (#5166)
+ * [e416f32ef](https://github.com/kubeovn/kube-ovn/commit/e416f32ef63139bcd60cdd040894cc396f39b9c5) ci: bump ubuntu to 24.04 (#5153)
+ * [f64f3ea17](https://github.com/kubeovn/kube-ovn/commit/f64f3ea17107e09e6d5e19a6a1a1fe0c97b738e8) fix dbus/NetworkManager connection in Talos (#5140)
+ * [fe45fa8e3](https://github.com/kubeovn/kube-ovn/commit/fe45fa8e30f014d0177fde742320dfd75e04cc4e) bump go to 1.23.7 (#5105)
+ * [0d0d6b832](https://github.com/kubeovn/kube-ovn/commit/0d0d6b83293004e089f2e7d4bd6603fbd0694958) fix: egress network policy not work, when no pod hit matchlabel
+ * [d9e1d9e1d](https://github.com/kubeovn/kube-ovn/commit/d9e1d9e1dc8c1149e001b52c9e9b3ac647018ec9) [fix] When the Nat-gw pod container restarts unexpectedly, trigger nat-gw statefulset restart to restore the nat-gw pod configuration (#5070)
+ * [8c2049b34](https://github.com/kubeovn/kube-ovn/commit/8c2049b34040decb4521fd94b3c41c82c2e91fa2) kubectl-ko: fix conntrack state (#5038)
+ * [8e183b1d6](https://github.com/kubeovn/kube-ovn/commit/8e183b1d6674c1f5fe3c242f3880dcf44c759e60) ci: remove legacy network policy e2e (#5035)
+ * [449fec2ba](https://github.com/kubeovn/kube-ovn/commit/449fec2ba3f32e6552fec12f31753a916f106b19) feat(GC): Add check for GC disabled (#5005)
+ * [432a98a83](https://github.com/kubeovn/kube-ovn/commit/432a98a831da1837379a939abf61101b86ba22b5) bump k8s to 1.30.10 (#5019)
+ * [8d33b59ea](https://github.com/kubeovn/kube-ovn/commit/8d33b59eaa7c7774df2f31d6723cd4c1174c8c29) ci: bump aquasecurity/trivy-action to 0.29.0
+ * [ad2538e19](https://github.com/kubeovn/kube-ovn/commit/ad2538e190afdcdeeca3b370f26d782b43cd85aa) prepare for next release
+
+### Contributors
+
+ * Kevin Carter
+ * Mengxin Liu
+ * changluyi
+ * clyi
+ * xiaoyie
+ * zhangzujian
+ * 张祖建
+
 ## v1.12.31 (2025-02-17)
 
  * [89c3acf1e](https://github.com/kubeovn/kube-ovn/commit/89c3acf1ef2f78f84175a7f47ef538012212ba13) release v1.12.31
